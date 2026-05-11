@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s        # Scrape every 5 seconds (good for thesis demos)
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'ras_drone_sim'
+    static_configs:
+      - targets: ['localhost:8000']
+        labels:
+          system: 'drone_sim'
+          environment: 'thesis_experiment'
