@@ -1,0 +1,12 @@
+# Prometheus's own runtime database - created automatically wherever
+# prometheus.exe is launched from (default --storage.tsdb.path=data).
+# Not source code, not evidence - just local time-series storage that
+# changes every time Prometheus runs. Never commit this.
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Telemetry CSVs produced by telemetry_logger.py at runtime
+telemetry_*.csv

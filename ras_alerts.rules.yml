@@ -1,0 +1,49 @@
+# RQ2 Prometheus alerting rules — autonomous fault detection
+#
+# These evaluate the RAW metrics published by ras_exporter_live.py.
+# No metric here is a pre-labelled fault flag - Prometheus itself decides
+# whether a fault is occurring, which is the core RQ2 upgrade over RQ1
+# (where ras_health_status came pre-computed from the dataset).
+#
+# Thresholds below are PLACEHOLDERS. Per the RQ2 risk mitigation plan, they
+# must be replaced with values derived from Phase 1 baseline flights before
+# being used for Phase 2 fault-injection experiments.
+
+groups:
+  - name: ras_fault_detection
+    rules:
+      - alert: DroneLowBattery
+        expr: ras_battery_percent < 15
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drone battery critically low"
+          description: "Battery below 15% for 10s+ (current: {{ $value }}%)."
+
+      - alert: DroneOverheating
+        expr: ras_temperature_high_c > 60
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Drone onboard temperature too high"
+          description: "Upper temperature bound exceeded 60C (current: {{ $value }}C)."
+
+      - alert: DroneUnstableAttitude
+        expr: abs(ras_pitch_deg) > 30 or abs(ras_roll_deg) > 30
+        for: 5s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drone attitude outside expected range"
+          description: "Pitch/roll exceeded 30 degrees - possible loss of control or collision."
+
+      - alert: DronePollFailure
+        expr: ras_last_poll_success == 0
+        for: 5s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Lost connection to drone"
+          description: "The exporter failed to poll the drone - possible link loss, crash, or low battery shutdown."

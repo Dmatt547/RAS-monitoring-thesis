@@ -1,14 +1,20 @@
-# RAS Health Monitoring — Thesis (T1 2026)
+# RAS Health Monitoring — Thesis (T1–T2 2026)
 
 Monitors the health of a Remote Autonomous System (drone) using Prometheus and Grafana. Built for the thesis: **"Monitoring the Health and Reliability of Remote Autonomous Systems"**.
 
-This repository covers **RQ1 (Trimester 1)**: validating a Prometheus-based monitoring pipeline using real drone telemetry replayed from the [Drone Telemetry Tampering Dataset v2](https://www.kaggle.com/datasets/rasikaekanayakadevlk/drone-telemetry-tampering-dataset-v2) (Kaggle). Physical DJI Tello drone integration is planned for RQ2 in Trimester 2.
+This is the single source-controlled home for all thesis code, T1 and T2 alike — RQ1 work (Trimester 1) and RQ2 work (Trimester 2) both live here from now on.
+
+**RQ1 (Trimester 1, complete):** validated a Prometheus-based monitoring pipeline using real drone telemetry replayed from the [Drone Telemetry Tampering Dataset v2](https://www.kaggle.com/datasets/rasikaekanayakadevlk/drone-telemetry-tampering-dataset-v2) (Kaggle). Fault detection relied on a pre-labelled health status already present in the dataset.
+
+**RQ2 (Trimester 2, in progress):** replaces the pre-labelled dataset with a physical DJI Tello drone streaming live telemetry, and replaces the pre-labelled health status with Prometheus alerting rules that detect faults autonomously from raw metrics.
 
 ## What it does
 
-- `ras_exporter.py` — Python script that replays drone telemetry from a CSV dataset row by row and exposes the metrics to Prometheus via HTTP on port 8000
-- `prometheus.yml` — Prometheus config that scrapes the exporter every 15 seconds
-- `grafana-dashboard.json` — Pre-built Grafana dashboard showing all metrics in real time
+- `ras_exporter.py` — RQ1. Replays drone telemetry from a CSV dataset row by row and exposes the metrics (including a pre-labelled `ras_health_status`) to Prometheus via HTTP on port 8000
+- `ras_exporter_live.py` — RQ2. Connects to a physical Tello drone via the `djitellopy` SDK and exposes its raw, live telemetry to Prometheus on port 8001. Publishes no health/fault label — see `ras_alerts.rules.yml`
+- `ras_alerts.rules.yml` — RQ2. Prometheus alerting rules that evaluate the raw live metrics against thresholds (battery, temperature, attitude, connection loss) to detect faults autonomously. Thresholds are placeholders pending Phase 1 baseline flight data
+- `prometheus.yml` — Prometheus config. Scrapes both exporters (RQ1 sim on 8000, RQ2 live on 8001) and loads the alert rules
+- `grafana-dashboard.json` — Pre-built Grafana dashboard showing all metrics in real time (RQ1; RQ2 panels to be added once live data is confirmed)
 
 The dataset contains 190 rows across six labelled phases, replayed at 1 row/second (~190 seconds total):
 
@@ -41,9 +47,11 @@ The dataset contains 190 rows across six labelled phases, replayed at 1 row/seco
 ## Requirements
 
 - Python + prometheus_client: `pip install prometheus_client`
+- Python + djitellopy (RQ2 only, needs the physical drone): `pip install djitellopy`
 - [Prometheus](https://prometheus.io/download) — download and extract
 - [Grafana](https://grafana.com/grafana/download) — install with the Windows installer
 - Drone Telemetry Tampering Dataset v2 CSV — download from [Kaggle](https://www.kaggle.com/datasets/rasikaekanayakadevlk/drone-telemetry-tampering-dataset-v2)
+- DJI Tello drone, charged, powered on, with the laptop connected to its Wi-Fi access point (RQ2 only)
 
 ---
 
@@ -83,6 +91,25 @@ python "C:\Users\danie\OneDrive\Documents\UNI\YEAR 4\SIT723 - Research Technique
 ```
 
 > The exporter will replay the dataset one row per second. Leave it running for the full ~190 seconds to cycle through all six phases.
+
+---
+
+## Running the RQ2 live drone path
+
+Same 3-thing pattern, with the live exporter instead of (or alongside) the RQ1 one:
+
+1. Start Prometheus and Grafana as above (the updated `prometheus.yml` now scrapes both exporters).
+2. Connect your laptop to the Tello's Wi-Fi access point.
+3. Run:
+
+```
+python "C:\Users\danie\OneDrive\Documents\UNI\YEAR 4\SIT723 - Research Techniques and Apps\Code\ras_exporter_live.py"
+```
+
+4. Check `http://localhost:8001/metrics` shows live numbers, then check the Prometheus targets page (`http://localhost:9090/targets`) shows `ras_drone_live` as **UP**.
+5. Check `http://localhost:9090/alerts` to see the RQ2 alert rules and whether any are currently firing.
+
+Both exporters can run at the same time (different ports), so RQ1 evidence stays reproducible while RQ2 work continues.
 
 ---
 
