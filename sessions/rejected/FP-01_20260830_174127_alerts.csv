@@ -1,0 +1,6 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FP-01_20260830_174127,baseline,DroneLowBattery,,,,,,0,-
+FP-01_20260830_174127,baseline,DroneOverTemperature,,,,,,6,-
+FP-01_20260830_174127,baseline,DroneUnstableAttitude,,,,,,5,-
+FP-01_20260830_174127,baseline,DroneBarometricDrift,,,11.0,,,1,"fired, no onset in telemetry"
+FP-01_20260830_174127,baseline,DronePollFailure,,,-30.0,,,0,"fired, no onset in telemetry"

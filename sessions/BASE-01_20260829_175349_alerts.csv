@@ -1,0 +1,5 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+BASE-01_20260829_175349,,DroneLowBattery,,,,,,0,-
+BASE-01_20260829_175349,,DroneOverTemperature,,,,,,0,-
+BASE-01_20260829_175349,,DroneUnstableAttitude,,,,,,3,-
+BASE-01_20260829_175349,,DronePollFailure,,,,,,0,-

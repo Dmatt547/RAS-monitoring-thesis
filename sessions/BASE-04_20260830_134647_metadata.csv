@@ -1,0 +1,16 @@
+key,value
+session_id,BASE-04
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B2
+battery_cycles,2
+operator_notes,
+started_iso,2026-08-30T03:46:47.731254+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,92
+battery_at_end,45
+ended_iso,2026-08-30T03:51:35.244720+00:00
+duration_sec,274.0

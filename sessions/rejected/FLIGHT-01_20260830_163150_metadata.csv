@@ -1,0 +1,16 @@
+key,value
+session_id,FLIGHT-01
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B2
+battery_cycles,3
+operator_notes,
+started_iso,2026-08-30T06:31:50.606886+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,88
+battery_at_end,72
+ended_iso,2026-08-30T06:32:38.126783+00:00
+duration_sec,34.0

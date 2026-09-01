@@ -1,0 +1,6 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FP-03_20260901_175652,baseline,DroneLowBattery,,,,,,0,-
+FP-03_20260901_175652,baseline,DroneOverTemperature,218.0,2026-09-01T08:00:44.361406+00:00,225.0,7.0,,16,fired
+FP-03_20260901_175652,baseline,DroneUnstableAttitude,,,,,,3,-
+FP-03_20260901_175652,baseline,DroneBarometricDrift,88.0,2026-09-01T07:58:34.361059+00:00,95.0,7.0,,7,fired
+FP-03_20260901_175652,baseline,DronePollFailure,,,276.0,,,0,"fired, no onset in telemetry"

@@ -1,0 +1,12 @@
+timestamp_iso,elapsed_sec,event,detail
+2026-08-30T06:32:06.127953+00:00,2.0,session_start,battery=88%
+2026-08-30T06:32:06.127953+00:00,2.0,step_begin,takeoff
+2026-08-30T06:32:14.875099+00:00,10.75,step_end,takeoff
+2026-08-30T06:32:14.875099+00:00,10.75,cycle_begin,1
+2026-08-30T06:32:14.875099+00:00,10.75,step_begin,hover_1
+2026-08-30T06:32:29.875463+00:00,25.75,step_end,hover_1
+2026-08-30T06:32:29.875463+00:00,25.75,step_begin,translate
+2026-08-30T06:32:30.783909+00:00,26.66,error,Command 'forward 80' was unsuccessful for 4 tries. Latest response:	'error No valid imu'
+2026-08-30T06:32:30.783909+00:00,26.66,step_begin,land
+2026-08-30T06:32:32.896927+00:00,28.77,step_end,land
+2026-08-30T06:32:38.126783+00:00,34.0,session_end,battery=72%

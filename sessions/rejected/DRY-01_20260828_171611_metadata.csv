@@ -1,0 +1,14 @@
+key,value
+session_id,DRY-01
+venue,Outside
+environment,Indoor
+ambient_temp_c,11
+battery_id,B2
+battery_cycles,10
+operator_notes,
+started_iso,2026-08-28T07:16:11.149476+00:00
+dry_run,True
+battery_at_start,77
+battery_at_end,76
+ended_iso,2026-08-28T07:17:40.201799+00:00
+duration_sec,89.0

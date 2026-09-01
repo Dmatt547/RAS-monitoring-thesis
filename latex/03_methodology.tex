@@ -1,0 +1,817 @@
+\section{Methodology}~\label{sec:methodology}
+
+\subsection{Overview}~\label{subsec:method-overview}
+
+This section sets out the research methodology: the aims and questions the work
+addresses, the method used to answer each research question, the schedule and
+milestones against which progress is tracked, the ethical obligations that apply,
+and the threats to the validity of the results.
+
+The research is conducted as \textbf{two sequential experimental studies} that
+share one design and one artefact.
+
+\begin{itemize}
+    \item \textbf{Study 1 (RQ1)} validated the monitoring pipeline architecture
+    using replayed telemetry from a publicly available, pre-labelled drone
+    dataset. Because ground-truth health state was supplied by the dataset, the
+    only thing under test was whether the pipeline could collect, store and
+    surface health state in real time.
+    \item \textbf{Study 2 (RQ2)} removes the labels. The same pipeline is
+    connected to a physical DJI Tello drone, fault thresholds are derived
+    empirically from the drone's own baseline telemetry, and Prometheus alerting
+    rules must determine health state autonomously from raw sensor readings.
+\end{itemize}
+
+There is a reason for running the studies in this order, and it is not only that
+the project spans two trimesters. Study 1 eliminates the pipeline architecture as
+a source of error, so any detection failure in Study 2 can be attributed to the
+detection logic, meaning the thresholds and alerting rules, rather than to the
+ingestion, storage or query layers beneath them. Establishing the instrument
+before testing the hypothesis is standard practice in experimental software
+engineering \citep{wohlin2012}, and it is what allows Study 2 to isolate
+threshold calibration as the variable of interest.
+
+\subsubsection{Candidate Methods and Selection}
+
+Five methods were considered. Table~\ref{tab:methods} compares them and states
+why each was or was not adopted.
+
+\begin{table}[htbp]
+\centering
+\caption{Comparison of Candidate Research Methods}
+\label{tab:methods}
+\footnotesize
+\begin{tabular}{|p{2.4cm}|p{3.4cm}|p{3.4cm}|p{4.6cm}|}
+\hline
+\textbf{Method} & \textbf{Strengths} & \textbf{Weaknesses} & \textbf{Decision and reason} \\
+\hline
+Experimental Research \citep{wohlin2012} & Produces real, measurable evidence; repeatable under controlled conditions & May not generalise beyond the test environment; needs controllable fault conditions & \textbf{Selected (primary).} The research questions ask for latency and false positive figures, which only controlled measurement on a running system can produce \citep{yousuf2024, paradeshi2022}. \\
+\hline
+Design Science Research \citep{hevner2004} & Produces a reusable artefact; iterative build and evaluate cycle & Evaluation can be subjective unless criteria are fixed in advance & \textbf{Selected (secondary).} The monitoring pipeline is a contribution in itself, not only an instrument, so it needs a method that evaluates artefacts \citep{boncea2016}. \\
+\hline
+Simulation / Modelling & Safe and repeatable; no hardware cost & Does not reproduce real hardware behaviour, Wi-Fi variability, thermal drift or battery ageing & \textbf{Rejected.} The gap concerns the absence of evidence from physical mobile platforms. Simulating the platform would reproduce the gap instead of closing it. \\
+\hline
+Case Study / Field Observation & High realism; captures operational context & No controlled fault injection; poor repeatability & \textbf{Rejected.} RQ2.3 needs known fault onset times, which uncontrolled observation cannot supply. \\
+\hline
+Literature Review & Establishes grounding; identifies gaps and prior approaches & Produces no original data; cannot validate an artefact & \textbf{Supporting input only.} Used to establish the gap and select tooling and metrics. \\
+\hline
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Experimental research (primary).} The primary method is a
+controlled, repeated-measures fault-injection experiment. Baseline flights under
+normal conditions are the control condition and flights with deliberately induced
+degradation are the treatment conditions. The independent variable is the class
+of induced fault. The dependent variables are detection outcome, detection
+latency, and alerts fired when no fault was induced. A latency figure needs a
+known fault onset time. A false positive rate needs a period of flight certified
+free of faults. Both are properties of a controlled experiment and neither
+survives in uncontrolled observation.
+
+\noindent\textbf{Design science research (secondary).} The monitoring pipeline is
+itself a contribution, and DSR provides an established structure for building and
+evaluating such artefacts \citep{hevner2004}. \citet{boncea2016} used the same
+approach to propose the Prometheus-based architecture this thesis builds on. The
+artefact is the pipeline: telemetry source $\rightarrow$ Python exporter
+$\rightarrow$ Prometheus $\rightarrow$ alerting rules $\rightarrow$ Grafana
+dashboard. It was developed across two DSR iterations, one per study.
+
+\subsubsection{Experimental Platform and Tooling}
+
+\begin{table}[htbp]
+\centering
+\caption{Required Resources}
+\label{tab:resources}
+\small
+\begin{tabular}{|>{\raggedright\arraybackslash}p{3.5cm}|p{6cm}|p{4.3cm}|}
+\hline
+\textbf{Resource} & \textbf{Purpose} & \textbf{Access / version} \\
+\hline
+DJI Tello drone & Representative RAS for live telemetry collection (Study 2) & Provided by Deakin University \\
+\hline
+Laptop / PC & Runs exporter, Prometheus, Grafana and session logger on one host & Personally owned; Windows 11 \\
+\hline
+Wi-Fi (2.4\,GHz) & Tello SDK communication over UDP & Direct Tello access point \\
+\hline
+Prometheus & Time-series collection, storage and alert rule evaluation & Open-source \\
+\hline
+Grafana & Dashboard visualisation of telemetry and alert state & Open-source \\
+\hline
+Python + \texttt{djitellopy} & Telemetry extraction and Prometheus exporter & Open-source; Python 3.11.9 \\
+\hline
+Drone Telemetry Tampering Dataset v2 & Pre-labelled telemetry for Study 1 & Public, via Kaggle \citep{ekanayakadevlk2024}; CC BY-SA 4.0 \\
+\hline
+\end{tabular}
+\end{table}
+
+Prometheus was selected for its pull-based scrape model, native time-series
+storage and PromQL query language, which supports the threshold-based alerting
+RQ2 requires. It is also the framework most widely reported in comparable
+monitoring architectures \citep{boncea2016}, which makes these results directly
+comparable to that prior work. Grafana was selected as the visualisation layer
+because it integrates natively with Prometheus and is likewise established in the
+reviewed literature \citep{benhafaiedh2022}. The exporter is written in Python
+for its suitability to telemetry handling and its access to \texttt{djitellopy}.
+
+A push-based stack (Telegraf/InfluxDB) would avoid the scrape-interval latency
+floor discussed below, and log-oriented tooling (ELK) suits event data better
+than numeric time series. Both were rejected, the former for being less widely
+evidenced in the RAS monitoring literature and the latter for being poorly
+matched to continuously sampled numeric telemetry. Managed cloud IoT platforms
+were rejected on principle, since the gap this thesis addresses is the absence of
+monitoring approaches that work \textit{without} cloud dependency.
+
+One trade-off is worth stating early. Prometheus' pull model imposes a hard lower
+bound on detection latency equal to the scrape interval, however quickly the
+exporter updates. Study 1 showed this directly: metric values updated at the
+exporter every second, but observed detection latency was governed by the
+15-second scrape cycle. Study 2 therefore uses a \SI{1}{\second} scrape interval,
+accepting the higher storage and CPU cost in exchange for a latency floor
+compatible with the targets in Section~\ref{subsec:method-rq2}.
+
+\subsection{Aims}~\label{subsec:method-aims}
+
+The research has four aims, which together define what the two studies are
+intended to produce.
+
+\begin{enumerate}
+    \item \textbf{Design a monitoring pipeline for remote autonomous systems}
+    that collects, stores and surfaces health telemetry in real time using
+    open-source components and no cloud dependency.
+    \item \textbf{Establish which telemetry metrics represent the operational
+    health} of a remote autonomous system, and demonstrate that the pipeline can
+    track transitions between healthy and faulted states.
+    \item \textbf{Derive fault detection thresholds empirically} from a
+    platform's own measured baseline behaviour, rather than assuming values
+    carried over from other domains, and state the derivation procedure so that
+    it transfers to other platforms.
+    \item \textbf{Evaluate the resulting detection performance} on physical
+    hardware under controlled fault conditions, reporting detection rate,
+    detection latency and false positive rate against targets fixed in advance.
+\end{enumerate}
+
+Aims 1 and 2 are addressed by Study 1 and answer RQ1. Aims 3 and 4 are addressed
+by Study 2 and answer RQ2.
+
+\subsection{Research Questions}~\label{subsec:method-rqs}
+
+Two research questions guide the study, each decomposed into measurable
+sub-questions.
+
+\vspace{0.5em}
+\noindent\textbf{RQ1:} \textit{How can monitoring frameworks be used to assess
+and maintain the health of remote autonomous systems?}
+
+\begin{itemize}
+    \item \textbf{RQ1.1:} Which telemetry metrics must a monitoring pipeline
+    expose in order to represent the operational health state of a remote
+    autonomous system?
+    \item \textbf{RQ1.2:} Can a pull-based time-series monitoring framework track
+    transitions between healthy and faulted states in RAS telemetry in real time?
+\end{itemize}
+
+\vspace{0.5em}
+\noindent\textbf{RQ2:} \textit{How can system metrics such as battery level,
+connectivity and performance be used to detect faults in remote autonomous
+systems?}
+
+\begin{itemize}
+    \item \textbf{RQ2.1:} What metric thresholds reliably distinguish normal
+    operation from fault conditions in a physical drone system, and how should
+    those thresholds be derived?
+    \item \textbf{RQ2.2:} How accurately can Prometheus alerting rules detect
+    fault conditions from raw telemetry without pre-labelled data?
+    \item \textbf{RQ2.3:} What are the detection latency and false positive rate
+    of the threshold-based alerting system under controlled fault scenarios?
+\end{itemize}
+
+These questions target the gap established in Section~\ref{subsec:lit-gap}. The
+literature reviewed rarely integrates real-time telemetry pipelines with physical
+autonomous systems operating outside controlled industrial settings
+\citep{boncea2016, devi2024}, and where threshold-based detection is used,
+thresholds are typically assumed rather than measured from the platform under
+observation \citep{yousuf2024}. RQ1 addresses the integration half of that gap.
+RQ2 addresses the calibration half, which is the more consequential of the two.
+Preliminary testing produced a concrete instance of why: an assumed
+\SI{60}{\celsius} temperature threshold, carried over from industrial motor
+monitoring conventions, produced a sustained false positive against real Tello
+telemetry, because the Tello's normal operating range differs from the
+assumption. That observation is the empirical motivation for the
+baseline-calibration procedure in Section~\ref{subsec:method-rq2}.
+
+Table~\ref{tab:design-matrix} maps each sub-question to the method, data,
+instrument, analysis and success criterion that address it.
+
+\begin{table}[htbp]
+\centering
+\caption{Research Design Matrix}
+\label{tab:design-matrix}
+\footnotesize
+\begin{tabular}{|p{1.4cm}|p{2.6cm}|p{2.6cm}|p{3.1cm}|p{3.4cm}|}
+\hline
+\textbf{Sub-\newline question} & \textbf{Data source} & \textbf{Instrument} & \textbf{Analysis} & \textbf{Success criterion} \\
+\hline
+RQ1.1 & Drone Telemetry Tampering Dataset v2 & Python exporter metric schema & Mapping of exposed metrics to RAS health dimensions & All identified health dimensions represented by at least one exposed metric \\
+\hline
+RQ1.2 & Dataset v2 (six labelled anomaly phases) & Exporter $\rightarrow$ Prometheus $\rightarrow$ Grafana & PromQL transition counting against dataset labels & 100\% of labelled fault-phase transitions reflected in \texttt{ras\_health\_status} \\
+\hline
+RQ2.1 & 5 Tello baseline flight sessions & Live Tello SDK exporter at \SI{1}{\second} scrape & Per-metric distribution analysis; percentile and operational-limit derivation & Threshold defined for every monitored metric, each traceable to baseline data \\
+\hline
+RQ2.2 & 9 Tello fault-injection runs (3 types $\times$ 3 reps) & Prometheus alerting rules (\texttt{rules.yml}) & Confusion matrix; detection rate and precision & $\geq$8 of 9 induced faults detected by the correct rule \\
+\hline
+RQ2.3 & Same 9 runs plus 5 baseline sessions & Alert firing times vs.\ raw telemetry event log & Latency distribution (median, IQR, max); false alerts per unit flight time & Median latency $\leq$\SI{5}{\second}, max $\leq$\SI{10}{\second}; $\leq$1 false alert per \SI{10}{\minute} normal flight \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{RQ1 Methodology}~\label{subsec:method-rq1}
+
+Study 1 tests whether the pipeline can \textit{observe} health state. It does not
+test whether the pipeline can \textit{determine} health state, which is RQ2's
+concern.
+
+\noindent\textbf{Data source.} Telemetry came from the Drone Telemetry Tampering
+Dataset v2 \citep{ekanayakadevlk2024}, a publicly available corpus of drone
+flight telemetry containing six labelled anomaly phases interleaved with normal
+operation. A pre-labelled dataset was chosen deliberately: because each row
+carries a ground-truth health state, any discrepancy between the dataset labels
+and what the pipeline surfaced is attributable to the pipeline and nothing else.
+
+\noindent\textbf{Instrument.} A Python exporter reads the dataset row by row and
+republishes each record as Prometheus metrics on an HTTP endpoint, replaying the
+recorded flight as though it were arriving live. Alongside the raw telemetry the
+exporter publishes \texttt{ras\_health\_status}, a composite state metric taken
+directly from the dataset label. Prometheus scrapes the endpoint on a fixed
+interval and Grafana renders the metrics and the health state.
+
+\noindent\textbf{Protocol.} The full dataset is replayed end to end in a single
+continuous run at a \SI{15}{\second} scrape interval. Metric coverage is checked
+throughout with \texttt{up} and per-metric \texttt{absent()} queries. Every
+labelled phase transition in the source data is then compared against the
+corresponding change in \texttt{ras\_health\_status} as recorded in Prometheus.
+
+\noindent\textbf{Analysis.} RQ1.1 is answered by mapping each exposed metric to
+the health dimensions identified in the literature review, and checking that
+every dimension is represented. RQ1.2 is answered by counting labelled phase
+transitions in the dataset and the corresponding transitions recorded in
+Prometheus; a transition is counted as tracked only if it appears in
+\texttt{ras\_health\_status} within one scrape interval of the labelled change.
+
+\begin{table}[htbp]
+\centering
+\caption{Study 1 Evaluation Criteria (RQ1)}
+\label{tab:eval-rq1}
+\small
+\begin{tabular}{|p{2.8cm}|p{5.4cm}|p{2.6cm}|p{3.0cm}|}
+\hline
+\textbf{Criterion} & \textbf{Operational definition} & \textbf{Target} & \textbf{Measured by} \\
+\hline
+Metric coverage & All defined health metrics present and non-stale in Prometheus for the full replay & 100\% of metrics & \texttt{up}, \texttt{absent()} \\
+\hline
+Transition fidelity & Labelled fault-phase transitions reflected by a corresponding change in \texttt{ras\_health\_status} & 100\% of transitions & PromQL transition count vs.\ dataset labels \\
+\hline
+Detection latency & Delay between a metric value changing at the exporter and that change being queryable in Prometheus & $\leq$ 1 scrape interval & Exporter log vs.\ Prometheus sample timestamps \\
+\hline
+Dashboard completeness & All monitored metrics and the health-state panel visible on one screen without scrolling & All metrics plotted & Dashboard inspection \\
+\hline
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Limitation carried into Study 2.} Because health state was read
+from a dataset label rather than computed from raw values, Study 1 says nothing
+about whether the system can recognise a fault it has not been told about. That
+limitation is what Study 2 exists to address, and it is the reason the two
+studies are sequential.
+
+\subsection{RQ2 Methodology}~\label{subsec:method-rq2}
+
+Study 2 removes the labels. The same pipeline is connected to a physical DJI
+Tello, and health state must be computed by Prometheus alerting rules from raw
+telemetry alone.
+
+\subsubsection{Platform Telemetry Constraints}
+
+The Tello's available telemetry differs materially from that of the GPS-equipped
+platforms described in much of the reviewed literature, and from the fields in
+the Study 1 dataset. The standard Tello carries \textbf{no GNSS receiver}, so
+geospatial metrics are unavailable, and Wi-Fi link quality is exposed as a
+signal-to-noise ratio query rather than a continuously sampled RSSI value.
+Table~\ref{tab:tello-fields} lists the fields the SDK does expose. This
+constraint shapes the metric set and returns as a threat to external validity in
+Section~\ref{subsec:method-threats}.
+
+\begin{table}[htbp]
+\centering
+\caption{Tello SDK Telemetry Fields Used in Study 2}
+\label{tab:tello-fields}
+\small
+\begin{tabular}{|p{3.6cm}|p{4.4cm}|p{1.6cm}|p{4.2cm}|}
+\hline
+\textbf{Field} & \textbf{Accessor} & \textbf{Unit} & \textbf{Role} \\
+\hline
+Battery level & \texttt{get\_battery()} & \% & Primary depletion fault signal \\
+\hline
+Flight time & \texttt{get\_flight\_time()} & s & Session duration; depletion rate denominator \\
+\hline
+Height & \texttt{get\_height()} & cm & Barometrically derived height; drift indicator rather than measured altitude \\
+\hline
+ToF distance & \texttt{get\_distance\_tof()} & cm & Primary altitude-hold signal \\
+\hline
+Barometer & \texttt{get\_barometer()} & cm & Altitude drift detection \\
+\hline
+Temperature (high / low) & \texttt{get\_highest\_
+temperature()}, \texttt{get\_lowest\_
+temperature()} & \si{\celsius} & Thermal state; settles toward an operating point in flight \\
+\hline
+Acceleration $x,y,z$ & \texttt{get\_acceleration
+\_x/y/z()} & 0.001g & Derived instability metric \\
+\hline
+Attitude (pitch, roll, yaw) & \texttt{get\_pitch()}, \texttt{get\_roll()}, \texttt{get\_yaw()} & deg & Derived instability metric \\
+\hline
+Velocity $x,y,z$ & \texttt{get\_speed\_x/y/z()} & dm/s & Recorded for completeness; near zero at \SI{1}{\hertz} even during commanded translation \\
+\hline
+Wi-Fi SNR & \texttt{query\_wifi\_signal
+\_noise\_ratio()} & dB & Link degradation fault signal \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsubsection{Data Collection Protocol}
+
+All sessions use a \SI{1}{\second} Prometheus scrape interval. The exporter,
+Prometheus and session logger run on a single host, so every timestamp comes from
+one system clock and clock synchronisation between devices cannot introduce
+measurement error.
+
+\noindent\textbf{Phase 1: Baseline (RQ2.1).} Five flight sessions under normal
+operating conditions, each of four minutes. Flights follow a fixed manoeuvre
+script (take-off, hover, translation, rotation, hover, land) so sessions are
+comparable. No faults are induced and no interventions are made. The purpose is
+to establish the empirical distribution of every monitored metric under normal
+operation, which is what the thresholds are derived from.
+
+Three controls hold the sessions comparable to one another. Each session begins
+on a fully charged battery, because percentage-per-minute depletion is not
+linear across the discharge curve and a part-charged start samples a different
+region of it. Batteries are alternated between sessions so that battery identity
+is not confounded with session order. The aircraft is returned to ambient
+temperature before each session, since residual heat from a preceding flight
+displaces the thermal distribution of the next one.
+
+Four-minute sessions sample the upper region of the discharge curve only. The
+lower region, approaching the automatic low-battery landing, is characterised by
+the Phase 2 depletion runs, which continue until that failsafe engages.
+
+\noindent\textbf{Phase 2: Fault injection (RQ2.2, RQ2.3).} Nine runs, made up of
+three fault classes with three repetitions each.
+
+\begin{enumerate}
+    \item \textbf{Battery depletion.} Flight continues until the Tello's
+    automatic low-battery landing engages. Tests whether the depletion rule fires
+    with enough lead time before the failsafe.
+    \item \textbf{Link degradation.} Separation between drone and controller is
+    increased progressively and line of sight is deliberately obstructed,
+    degrading Wi-Fi SNR. Tests the connectivity rule.
+    \item \textbf{Thermal and load stress.} Consecutive sorties flown without a
+    cool-down interval, on a part-discharged battery, with continuous high-speed
+    manoeuvring and no hover rest. Baseline measurement established that onboard
+    temperature settles toward an operating point rather than rising under load,
+    so aggressive manoeuvring alone does not produce a thermal fault, whereas
+    repeated sorties do. Tests the performance-degradation rules.
+\end{enumerate}
+
+\noindent\textbf{Ground-truth marking.} Live telemetry carries no labels, so
+fault onset has to be established independently of the alerting system being
+measured. Two timestamps are recorded per run: $t_{\text{induce}}$, the moment
+the operator begins inducing the fault, written to the session log as an event
+marker by the control script; and $t_{\text{onset}}$, the first crossing of the
+defined threshold in the raw \SI{1}{\hertz} telemetry log that persists for at
+least the hold duration applied by the rule, worked out retrospectively during
+analysis.
+
+The hold duration is part of the definition because a shorter crossing cannot
+raise an alert, and anchoring latency to one would measure the interval between
+two unrelated events. Crossings below that duration are recorded separately as
+transient crossings, since their frequency indicates how much of the false
+positive suppression is attributable to the hold rather than to the threshold
+value.
+
+Detection latency is measured from $t_{\text{onset}}$. Measuring from
+$t_{\text{induce}}$ would fold the drone's physical response time and the
+operator's reaction into the figure, and neither of those is part of what RQ2.3
+asks about. $t_{\text{induce}}$ is still recorded, as context and to confirm each
+run's fault was induced as intended.
+
+\noindent\textbf{Data recorded per session.} Each session is logged under four
+headings. The first three make a session identifiable and comparable to the
+others; the fourth is the measurement itself.
+
+\begin{itemize}
+    \item \textbf{Session identity.} A unique session identifier, and the date
+    and time of the flight.
+    \item \textbf{Conditions.} The venue, whether the flight was indoors or
+    outdoors, and the ambient temperature.
+    \item \textbf{Hardware state.} The Tello firmware version, the battery
+    identifier, and that battery's approximate cycle count.
+    \item \textbf{Measurements.} The full \SI{1}{\hertz} raw telemetry log,
+    every Prometheus alert firing and resolution timestamp, the operator event
+    markers, and the Prometheus system logs.
+\end{itemize}
+
+Conditions and hardware state are recorded because they vary between sessions
+and affect the readings. Ambient temperature shifts the thermal baseline, and
+battery age changes the depletion rate. Logging both means an outlier session
+can be explained rather than discarded.
+
+\subsubsection{Threshold Derivation Procedure}~\label{subsec:method-thresholds}
+
+Study 1's main limitation was that health state came from dataset labels instead
+of being computed. Removing that dependency makes threshold derivation the
+central methodological problem of this thesis, not an implementation detail.
+
+A single uniform rule will not work, because the monitored metrics do not behave
+the same way as one another. Battery level, for example, falls steadily
+throughout every flight by design, so a percentile of its distribution would say
+nothing useful about when the drone is actually at risk.
+Table~\ref{tab:threshold-rules} groups metrics by how they behave and gives each
+group its own derivation rule and rationale.
+
+\begin{table}[htbp]
+\centering
+\caption{Threshold Derivation Rules by Metric Class}
+\label{tab:threshold-rules}
+\footnotesize
+\begin{tabular}{|p{2.4cm}|p{3.1cm}|p{4.2cm}|p{4.1cm}|}
+\hline
+\textbf{Metric class} & \textbf{Metrics} & \textbf{Derivation rule} & \textbf{Rationale} \\
+\hline
+Monotonic / depleting & Battery level & Operational limit plus safety margin: alert above the firmware auto-land point, with the margin sized from the mean depletion rate observed in Phase 1 & The quantity declines by design, so no percentile of its distribution is meaningful. What matters is keeping enough lead time to act before the failsafe. \\
+\hline
+Stationary / bounded & Wi-Fi SNR & Empirical 1st or 99th percentile of the pooled Phase 1 distribution, per metric direction & Percentiles assume nothing about normality. Telemetry from a mobile platform is skewed and multi-modal across flight modes, so mean $\pm k\sigma$ would put the bound in the wrong place. \\
+\hline
+Settling & High and low onboard temperature & 99th percentile of the settled region, taken as the final \SI{90}{\second} of each Phase 1 session, per metric direction & The quantity converges toward an operating point rather than varying about a mean, so most samples in a short session describe the warm-up transient rather than steady operation. A percentile over the whole session is displaced below the range the aircraft occupies once settled. \\
+\hline
+Drift / relative & Barometric height, derived height & Deviation from the metric's own trailing \SI{60}{\second} mean, with the threshold at the 99th percentile of the pooled Phase 1 deviation distribution & The absolute reading tracks atmospheric pressure rather than the aircraft, so a pooled percentile band would encode the prevailing weather. Deviation from the metric's own recent mean is comparable across sessions; the raw value is not. \\
+\hline
+Derived / variance & Attitude and acceleration instability & Rolling standard deviation over a \SI{5}{\second} window, with the threshold at the 99th percentile of the Phase 1 rolling-standard-deviation distribution & Instantaneous attitude values mean little on their own during normal manoeuvring. Dispersion is what separates controlled flight from loss of stability. \\
+\hline
+Liveness & Target reachability, metric staleness & Binary: \texttt{up == 0} or \texttt{absent()} sustained beyond two scrape intervals & Missing data is itself a fault condition, and cannot be expressed as a numeric bound. \\
+\hline
+\end{tabular}
+\end{table}
+
+Every rule also uses a Prometheus \texttt{for} condition, requiring the
+threshold to remain active for 5 seconds before an alert is triggered. This
+reduces false alarms caused by short-term fluctuations, which are common in
+Wi-Fi SNR readings, but adds 5 seconds to the detection time. This additional
+delay is considered in the latency targets presented in
+Table~\ref{tab:eval-rq2}.
+
+Time-of-flight distance is measured and reported but no threshold is derived
+from it. Its upper tail arises from the aircraft passing over lower floor area in
+one particular room, which is a property of the venue rather than of the
+platform and would not transfer to another flight space.
+
+The threshold values themselves are reported with the Study 2 results in
+Section~\ref{sec:rq2}, since they are findings rather than design decisions.
+
+\subsubsection{Data Analysis Plan}~\label{subsec:method-analysis}
+
+Four measures are computed from the session logs. Each is defined here so that
+any figure reported in Section~\ref{sec:rq2} can be traced back to the raw data
+and recalculated.
+
+\vspace{0.5em}
+\noindent\textbf{Detection outcome.} Every fault run is classified into one of
+three outcomes. A \textit{true positive} means the rule matching the induced
+fault fired. A \textit{false negative} means no rule fired. A
+\textit{misclassification} means a rule fired, but for the wrong fault class.
+The nine runs are collected into a confusion matrix, which gives the detection
+rate and precision.
+
+\vspace{0.5em}
+\noindent\textbf{Detection latency.} The gap between the fault appearing in the
+telemetry and the alert firing, calculated as
+$t_{\text{alert}}-t_{\text{onset}}$. Reported as a median, an interquartile
+range and a maximum across all detected faults.
+
+\vspace{0.5em}
+\noindent\textbf{False positives.} An alert that fires while the drone is
+behaving normally. This can happen in two places: during a baseline session, or
+during a fault run before the fault has been induced. Both are counted. The
+result is expressed as a rate, false alerts per \SI{10}{\minute} of normal
+flight, rather than a raw count, so the figure stays comparable if the number of
+sessions changes.
+
+The rate is measured on normal flights held out from threshold derivation,
+together with the pre-induction segment of each fault run. Measuring it on the
+derivation sessions themselves would be circular, since a 99th-percentile
+threshold is exceeded by approximately one percent of its own derivation data by
+construction.
+
+\vspace{0.5em}
+\noindent\textbf{Metric coverage.} The proportion of monitored metrics that are
+present and up to date in Prometheus for the full duration of a session, checked
+with \texttt{up} and per-metric \texttt{absent()} queries. This confirms the
+other three measures were computed from complete data.
+
+\vspace{0.5em}
+Only descriptive statistics are used. Five baseline sessions and nine fault runs
+are too few to support significance testing, so results are reported as medians
+with ranges, accompanied by the individual per-run figures. This lets the reader
+judge the variability directly rather than relying on a summary statistic the
+sample cannot justify. The small sample is a consequence of the experimental
+design, and its effect on what can be claimed is addressed in
+Section~\ref{subsec:method-threats}.
+
+\begin{table}[htbp]
+\centering
+\caption{Study 2 Evaluation Criteria (RQ2)}
+\label{tab:eval-rq2}
+\small
+\begin{tabular}{|p{2.8cm}|p{5.4cm}|p{2.6cm}|p{3.0cm}|}
+\hline
+\textbf{Criterion} & \textbf{Operational definition} & \textbf{Target} & \textbf{Measured by} \\
+\hline
+Threshold traceability & Every alerting rule threshold derived from Phase 1 baseline data by a stated rule, with no assumed values & 100\% of rules & Threshold table vs.\ baseline corpus \\
+\hline
+Detection rate & Induced faults for which the correct alerting rule fired & $\geq$ 8 of 9 runs & Confusion matrix \\
+\hline
+Detection latency & $t_{\text{alert}}-t_{\text{onset}}$ & Median $\leq$ \SI{5}{\second}; max $\leq$ \SI{10}{\second} & Alert log vs.\ raw telemetry log \\
+\hline
+False positive rate & False alerts per \SI{10}{\minute} of normal flight, pooled across baseline sessions & $\leq$ 1 per \SI{10}{\minute} & Alert log vs.\ baseline sessions \\
+\hline
+Metric coverage & All monitored metrics present and non-stale for the full duration of every session & $\geq$ 99\% of samples & \texttt{up}, \texttt{absent()} \\
+\hline
+Dashboard completeness & All monitored metrics, current alert state and fault annotations visible on one screen & All metrics and alert state & Dashboard inspection \\
+\hline
+\end{tabular}
+\end{table}
+
+The measures above define what is calculated. Table~\ref{tab:eval-rq2} states
+the target each must meet for the study to be judged successful, fixed before
+any data was collected.
+
+All criteria in both studies were fixed before the corresponding data was
+collected, and are expressed as numeric, observable targets. This is a
+requirement of DSR, where artefact evaluation is subjective unless criteria are
+defined in advance \citep{hevner2004}.
+
+\subsection{Timeline and Milestones}~\label{subsec:method-timeline}
+
+Figure~\ref{fig:gantt} shows the schedule for the remainder
+of the trimester and Table~\ref{tab:milestones} states the milestones against
+which progress is tracked.
+
+% ---------------------------------------------------------------------------
+% Move your existing Gantt chart (old Figure 4, RQ2 Milestone Plan) here.
+% Shade completed bars and mark the current week.
+% ---------------------------------------------------------------------------
+
+\begin{table}[htbp]
+\centering
+\caption{Research Milestones}
+\label{tab:milestones}
+\small
+\begin{tabular}{|p{0.6cm}|p{4cm}|p{5cm}|p{2.2cm}|p{1.7cm}|}
+\hline
+\textbf{\#} & \textbf{Milestone} & \textbf{Deliverable / evidence} & \textbf{Target} & \textbf{Status} \\
+\hline
+M1 & Pipeline validated on labelled data & Study 1 results, Section~\ref{sec:rq1} & T1 & Complete \\
+\hline
+M2 & Live Tello telemetry reaching Prometheus & Working exporter; target health page & 19 Jul 2026 & Complete \\
+\hline
+M3 & Baseline data collection complete & 5 archived session logs & Sun 30 Aug 2026 & Complete \\
+\hline
+M4 & Thresholds derived and rules encoded & Threshold table; \texttt{rules.yml} & Sun 30 Aug 2026 & Complete \\
+\hline
+M5 & Fault injection complete & 9 annotated run logs & Sun 7 Sep 2026 & \\
+\hline
+M6 & Analysis complete & Confusion matrix; latency and FP results & Fri 11 Sep 2026 & \\
+\hline
+M7 & Full draft to supervisor & Complete thesis draft & Mon 14 Sep 2026 & \\
+\hline
+M8 & Final submission & Final thesis and presentation & Mon 21 Sep 2026 & \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Risks and Mitigations}
+\label{tab:risks}
+\footnotesize
+\begin{tabular}{|p{3.2cm}|p{1.3cm}|p{6.4cm}|p{2.6cm}|}
+\hline
+\textbf{Risk} & \textbf{L / I} & \textbf{Mitigation} & \textbf{Status} \\
+\hline
+Threshold miscalibration causing false positives & High / High & Thresholds derived from Phase 1 baseline data by the rules in Table~\ref{tab:threshold-rules}, never assumed; \texttt{for:} hold durations suppress transients; thresholds pooled across all five baseline sessions rather than fitted to one; derived values validated against normal flights held out from the derivation & \textbf{Realised} in preliminary testing (\SI{60}{\celsius} assumption) and confirmed against baseline data \\
+\hline
+Metric assigned to the wrong behavioural class & Med / High & Metric class assignments in Table~\ref{tab:threshold-rules} tested by applying the derived threshold to held-out normal flights, since a misclassification is not visible from the derivation rule alone & \textbf{Realised} for barometric height and for onboard temperature; both reclassified \\
+\hline
+Tello hardware failure or unavailability & Med / High & Drone sourced from the Deakin equipment pool early in the trimester; spare batteries maintained; fallback to extended dataset-based experimentation preserves RQ2.1 and RQ2.2 & Monitored \\
+\hline
+Wi-Fi interference degrading telemetry & Med / Med & Flights conducted on the Tello's own access point indoors; multiple sessions per phase; outlier sessions reported rather than silently discarded & Controlled \\
+\hline
+Scrape interval too coarse for real-time detection & Low / Med & Scrape interval reduced from \SI{15}{\second} to \SI{1}{\second} for Study 2; storage overhead measured and reported & Mitigated \\
+\hline
+Insufficient fault range achievable indoors & Med / Med & Wi-Fi degradation supplemented by deliberate line-of-sight occlusion; outdoor contingency sessions available under CASA compliance & Monitored \\
+\hline
+Small sample limiting statistical claims & High / Low & Descriptive statistics only, with per-run figures reported; limitation stated explicitly & Accepted \\
+\hline
+Time constraints in a single trimester & Med / High & Two-week buffer between M6 and M7; Study 2 scoped to three fault classes & Monitored \\
+\hline
+\end{tabular}
+\end{table}
+
+Should baseline or fault collection be prevented entirely, the contingency in
+Table~\ref{tab:risks} applies: analysis reverts to an extended dataset-based
+experiment, which would narrow the contribution to RQ2.1 and RQ2.2 without
+invalidating the design.
+
+\subsection{Ethical Considerations}~\label{subsec:method-ethics}
+
+\subsubsection{Human Participants and Ethics Determination}
+
+This research involves no human participants, no personal data and no
+observation of people. All data is machine-generated telemetry from a consumer
+drone, so the project does not constitute human research under the National
+Statement on Ethical Conduct in Human Research and requires no approval from
+either a Faculty Human Ethics Advisory Group (low-risk review) or the Deakin
+University Human Research Ethics Committee (DUHREC).
+
+\subsubsection{Flight Safety and Regulatory Compliance}
+
+Operating a powered aerial vehicle carries physical risk to people and property,
+which is managed as follows.
+
+\noindent\textbf{Indoor flights (primary).} All flights contributing data to
+this study were conducted indoors at a private residence. Two exploratory
+sessions were flown outdoors on 28 August 2026 under the CASA conditions
+described below; both were excluded from analysis because baseline and
+fault-injection runs must share a single environment, and both are retained in
+the repository as rejected sessions. Civil Aviation Safety Authority (CASA)
+rules governing outdoor airspace do not apply indoors, so for the sessions used
+here the controlling considerations are venue and bystander safety. Permission to fly is obtained from the space's
+custodian before each session. Flights are conducted in a cleared area with no
+uninvolved persons present, propeller guards fitted at all times, and altitude
+limited by ceiling clearance. The Tello's automatic low-battery landing failsafe
+stays enabled in every session, including battery depletion runs, where it is the
+object of measurement rather than a constraint to disable.
+
+\noindent\textbf{Outdoor flights (contingency).} Should outdoor sessions be
+needed to obtain a wider Wi-Fi degradation range, they will comply with CASA
+recreational rules for very small remotely piloted aircraft (the Tello's take-off
+weight is approximately \SI{80}{\gram}): below \SI{120}{\metre} AGL, in daylight,
+within visual line of sight, clear of populous areas and emergency operations,
+and outside the exclusion radius of controlled aerodromes. Current CASA guidance
+will be checked immediately before any outdoor session rather than relied on from
+this document, as the rules are subject to amendment. Outdoor sessions will not
+be flown in rain or in wind exceeding the manufacturer's stated limit.
+
+\subsubsection{Data Management and Privacy}
+
+No personally identifiable information is collected at any stage. The Tello
+carries no GNSS receiver, so no location data is recorded, and although the
+airframe has a camera, the video stream is not enabled, captured or stored in any
+session. Only numeric telemetry is collected.
+
+Telemetry, session logs and configuration files are stored locally on
+password-protected, full-disk-encrypted hardware, with backups to a private
+version-controlled repository accessible only to the researcher and supervisor
+during the project. Data is retained for the minimum period required by
+university policy following submission. On submission the telemetry and
+configuration artefacts are released publicly as described in
+Section~\ref{subsec:method-summary}; because the data contains no personal or
+sensitive information, no de-identification is required before release.
+
+\subsubsection{Research Integrity and Use of Generative AI}
+
+All results are reported as observed, including failures, missed detections and
+false positives. The \SI{60}{\celsius} false positive encountered during
+preliminary testing is reported in full instead of discretely corrected, because
+it is evidence for the central argument of RQ2. Negative and partial results are
+reported with the same prominence as successful ones.
+
+Generative AI tools were used in a defined and limited capacity, consistent with
+Deakin University's requirements on acknowledging AI assistance. Claude
+(Anthropic) was used to assist in producing the software instruments for both
+studies: the Study 1 replay exporter, and the Study 2 session harness, session
+validator and threshold derivation script. It was also used for code-level
+debugging and document structuring. The research design, research questions,
+choice of methods, metric selection, threshold derivation rules, experimental
+protocol and all interpretation of results are the author's own work.
+
+Two distinctions are stated explicitly. First, the derivation rules in
+Table~\ref{tab:threshold-rules} were specified by the author; the derivation
+script implements those rules and computes their outputs from the measured data,
+and no threshold value was proposed or selected by an AI tool. Second, no AI tool
+generated, altered or fabricated any telemetry. All data derives from physical
+flights, and the raw session logs are published so that every reported figure can
+be recomputed independently. All AI-assisted code was reviewed, executed and
+validated by the author against real flights before use.
+
+\subsection{Threats to Results}~\label{subsec:method-threats}
+
+Threats are organised by type, following standard practice in experimental
+software engineering \citep{wohlin2012}. Risks to the project schedule are
+handled separately in Table~\ref{tab:risks}.
+
+\noindent\textbf{Internal validity.} Battery ageing, cell condition and ambient
+temperature vary between sessions and affect both depletion rate and thermal
+readings, so battery identifier and ambient temperature are logged per session
+and any outlier can be attributed rather than dismissed. More significantly,
+thresholds are derived from baseline flights on the same airframe later used for
+fault runs, which risks fitting the thresholds to that specific unit. Pooling
+across five baseline sessions rather than one reduces this, but it cannot be
+eliminated with a single available drone, and it constrains the strength of the
+RQ2.1 claim.
+
+\noindent\textbf{Ambient temperature.} The temperature threshold is expressed as
+an absolute value and is therefore sensitive to the conditions under which the
+baseline was collected. All five baseline sessions were flown at an ambient
+temperature of \SI{21}{\celsius} and their settled means fall between
+\SI{61.4}{} and \SI{62.8}{\celsius}. A held-out normal flight conducted in a
+room estimated to be \SI{1}{} to \SI{2}{\celsius} warmer settled at
+\SI{64.0}{\celsius}, above every baseline session, while its battery depletion
+rate and mean acceleration magnitude remained within the baseline range. A
+baseline collected at a single ambient temperature cannot quantify that
+relationship, so the derived value transfers only to comparable conditions.
+
+\noindent\textbf{Positioning and ambient lighting.} The aircraft holds position
+using a downward-facing camera and a time-of-flight sensor, and therefore depends
+on ambient lighting. A session attempted in a dimly lit room produced
+time-of-flight readings ranging between \SI{21}{} and \SI{133}{\centi\metre}
+against a stable \SI{77}{} to \SI{78}{\centi\metre} in adequate light,
+uncommanded lateral drift, refusal of relative-position commands, and a battery
+depletion rate approximately \num{2.5} times the baseline. Lighting is therefore
+controlled alongside venue and ambient temperature, and the affected session was
+excluded.
+
+\noindent\textbf{External validity.} The study uses one drone model in a
+predominantly indoor environment with a small number of sessions, so the specific
+threshold values are not transferable to other platforms. The Tello's telemetry
+is also narrower than that of the platforms in much of the reviewed literature,
+providing no GNSS data and only coarse Wi-Fi quality information, which limits
+how directly the findings compare to GPS-equipped research platforms. What is
+claimed as transferable is the derivation \textit{procedure} and the pipeline
+architecture, not the numbers, and that distinction is maintained throughout the
+reporting of results.
+
+\noindent\textbf{Construct validity.} A composite health-status metric compresses
+a multi-dimensional condition into a single value, and whether it represents
+"health" in a way an operator would accept is a modelling assumption rather than
+a measured fact. Detection latency is bounded below by the scrape interval and
+the \texttt{for:} hold duration, so the figures reported measure the latency of
+\textit{this configuration}, not an intrinsic property of threshold-based
+detection. Both bounds are stated alongside every latency result. Defining fault
+onset from the first raw threshold crossing partially couples the onset
+definition to the threshold under test; the operator induction marker is kept as
+an independent check against this.
+
+\noindent\textbf{Reliability.} All session logs, configuration files, alert
+histories and PromQL queries are archived and published, so every reported figure
+can be independently recomputed from the raw data. Tool versions are pinned.
+Where a session is excluded from analysis, the exclusion and its reason are
+reported rather than the session being silently dropped.
+
+\subsection{Summary}~\label{subsec:method-summary}
+
+The methodology is one experimental design executed as two studies against a
+single artefact. Study 1 established that the pipeline can observe health state,
+using a pre-labelled dataset so that the pipeline itself was the only thing under
+test. Study 2 removes the labels and requires the same pipeline to determine
+health state from raw telemetry on physical hardware, with every threshold
+derived from the drone's own measured baseline rather than assumed. Experimental
+research supplies the controlled conditions that make detection latency and false
+positive rate measurable; design science research supplies the structure for
+evaluating the pipeline as a contribution in its own right. Evaluation criteria
+for both studies were fixed before the corresponding data was collected, and the
+limits of what the results can support are stated in
+Section~\ref{subsec:method-threats} rather than left implicit.
+
+\noindent\textbf{Sustainability and reuse.} All research artefacts are published
+in a public repository on submission
+(\url{https://github.com/Dmatt547/RAS-monitoring-thesis.git}): both exporters,
+\texttt{prometheus.yml}, \texttt{rules.yml} with the derived thresholds, the
+Grafana dashboard as exported JSON, the full baseline and fault-run telemetry
+logs, the PromQL queries used in analysis, and a README documenting the
+reproduction procedure end to end. The Study 1 dataset is not redistributed, as
+it is licensed CC BY-SA 4.0 \citep{ekanayakadevlk2024}; it is cited and linked
+instead, with the preprocessing script provided so the replay can be
+reconstructed. Tool versions are pinned in Table~\ref{tab:resources} and the
+deployment is containerised, so the pipeline can be rebuilt without manual
+environment configuration.
+
+Every component of the stack is open-source, with no paid licence, subscription
+or cloud service in the dependency chain. That is a deliberate design property,
+since the gap addressed is the absence of monitoring approaches that survive
+without cloud infrastructure, and it means the artefact keeps working after the
+project ends and after any university account access ends. The exporter
+presents a platform-agnostic interface, so any system reporting numeric telemetry
+can replace the Tello without altering the Prometheus, alerting or dashboard
+layers. The derivation rules in Table~\ref{tab:threshold-rules} are stated in
+terms of metric behaviour rather than drone-specific fields. Prometheus'
+multi-target scrape model also allows extension from one drone to a fleet without
+architectural change. These extensions are discussed in
+Section~\ref{subsec:future-work}.

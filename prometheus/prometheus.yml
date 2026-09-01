@@ -1,6 +1,6 @@
 global:
   scrape_interval: 15s        # Scrape every 15 seconds (good for thesis demos)
-  evaluation_interval: 5s
+  evaluation_interval: 1s     # rule evaluation must not dominate the RQ2.3 latency budget
 
 rule_files:
   - "ras_alerts.rules.yml"    # RQ2 threshold-based fault detection rules
@@ -14,7 +14,7 @@ scrape_configs:
           environment: 'thesis_experiment'
 
   - job_name: 'ras_drone_live'
-    scrape_interval: 5s        # faster polling for real-time fault detection (RQ2)
+    scrape_interval: 1s        # 1 Hz, per the Study 2 data collection protocol (RQ2)
     static_configs:
       - targets: ['localhost:8001']
         labels:

@@ -1,0 +1,514 @@
+"""
+Flight session harness — RQ2, Study 2. Phase 1 baseline and Phase 2 faults.
+
+One process does three jobs, so a session is a single command:
+
+  1. Flies a fixed manoeuvre script (take-off, hover, translation, rotation,
+     hover, land) so that variation between sessions reflects the platform and
+     not the pilot.
+  2. Logs raw telemetry to CSV at 1 Hz, with every sample tagged by the
+     manoeuvre step that was running when it was taken.
+  3. Exposes the same raw telemetry to Prometheus on port 8001, replacing
+     ras_exporter_live.py for the duration of the session.
+
+Why one process: the Tello accepts a single SDK client at a time. Running
+ras_exporter_live.py and a separate flight script together would have two
+djitellopy clients competing for the same UDP ports. This harness therefore
+supersedes ras_exporter_live.py during flights — do not run both.
+
+Threading model:
+  - Main thread sends flight commands (blocking) and SNR queries.
+  - Logger thread reads get_current_state() at 1 Hz. That reads the drone's
+    broadcast state stream and sends nothing, so it is safe to run unlocked
+    alongside commands.
+  - CMD_LOCK serialises everything that does send a command (manoeuvres and
+    the SNR query), because the command channel is single-response.
+
+Wi-Fi SNR is a command-channel query, not part of the state stream, so it
+cannot be sampled at 1 Hz without contending with flight commands. It is polled
+on a slower sub-cadence and carried forward between polls; snr_age_sec records
+how stale each carried-forward value is.
+
+Modes. Phase 2 fault injection is scripted rather than hand-flown, for the same
+reason the baseline is: three repetitions of a fault have to be the same fault.
+The Tello also accepts one SDK client at a time, so piloting from the phone app
+while logging is not possible.
+
+    baseline   the Phase 1 manoeuvre script. 4 min, lands at the battery floor.
+    battery    flies on until the Tello's own low-battery failsafe lands it.
+               No duration limit and no floor: the failsafe is the measurement.
+    thermal    continuous high-speed manoeuvring with no hover rest. Run these
+               back to back with no cool-down - baseline data showed that is
+               what actually raises onboard temperature, not aggression alone.
+    link       stationary hover while the operator walks away with the
+               controller. The drone holds position; the operator moves.
+
+Ground-truth marking. Detection latency is measured from t_onset, worked out
+from the telemetry afterwards, but the protocol also requires t_induce: the
+moment the operator began inducing the fault. Press ENTER at any time during a
+run to write an `operator_marker` event with that timestamp. In link mode that
+is the only way to record it, since only the operator knows when they started
+walking.
+
+Usage:
+    python flight_session.py                     # Phase 1 baseline
+    python flight_session.py --dry               # no motors: verify logging
+    python flight_session.py --mode battery      # Phase 2: depletion
+    python flight_session.py --mode thermal      # Phase 2: thermal / load
+    python flight_session.py --mode link         # Phase 2: link degradation
+    python flight_session.py --duration 480 --battery-floor 15
+
+Stop early with Ctrl+C: the drone lands and the logs are closed cleanly.
+"""
+
+import argparse
+import csv
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from djitellopy import Tello
+from prometheus_client import Gauge, start_http_server
+
+# --- Settings ---------------------------------------------------------------
+SCRAPE_PORT = 8001
+LOG_INTERVAL_SEC = 1.0        # 1 Hz, per the Study 2 collection protocol
+SNR_INTERVAL_SEC = 5.0        # command-channel query, cannot run at 1 Hz
+DEFAULT_DURATION_SEC = 240    # 4 minutes (one session per battery)
+DEFAULT_BATTERY_FLOOR = 15    # land cleanly at or below this (%)
+MIN_TAKEOFF_BATTERY = 25      # refuse to start a session below this (%)
+MAX_TAKEOFF_TEMP_C = 60       # refuse to start unless the aircraft has cooled.
+                              # Properly cooled baselines start at 55-58 C; a
+                              # session flown 14 min after the previous one
+                              # started at 68 C and sat above the derived
+                              # ceiling for its first 22 airborne samples.
+                              # Thermal runs need a warm aircraft, so the check
+                              # is skipped in that mode.
+SESSION_DIR = Path(__file__).parent / "sessions"
+
+# Per-mode overrides. duration/floor of None means "use the CLI value".
+# A floor of 0 disables the harness's own landing so the aircraft's failsafe is
+# what ends the run, which is the point of the battery-depletion fault.
+MODES = {
+    "baseline": {"duration": None, "floor": None,
+                 "prefix": "BASE",       "speed": None},
+    "battery":  {"duration": 1800, "floor": 0,
+                 "prefix": "FAULT-BAT",  "speed": None},
+    "thermal":  {"duration": None, "floor": 15,
+                 "prefix": "FAULT-THERM", "speed": 100},
+    "link":     {"duration": 600,  "floor": 15,
+                 "prefix": "FAULT-LINK", "speed": None},
+}
+
+# Telemetry fields read from the state stream. Names are the Tello SDK's.
+FIELDS = ["bat", "time", "h", "tof", "baro", "templ", "temph",
+          "pitch", "roll", "yaw", "vgx", "vgy", "vgz", "agx", "agy", "agz"]
+
+CSV_HEADER = (["timestamp_iso", "elapsed_sec", "step_index", "step_label"]
+              + FIELDS + ["snr_db", "snr_age_sec"])
+
+# --- Prometheus gauges (names match ras_exporter_live.py) --------------------
+GAUGES = {
+    "bat": Gauge("ras_battery_percent", "Battery level (%)"),
+    "templ": Gauge("ras_temperature_low_c", "Lower bound of onboard temperature range (C)"),
+    "temph": Gauge("ras_temperature_high_c", "Upper bound of onboard temperature range (C)"),
+    "h": Gauge("ras_height_cm", "Height above ground (cm)"),
+    "tof": Gauge("ras_tof_cm", "Time-of-flight ground clearance (cm)"),
+    "baro": Gauge("ras_barometer_cm", "Barometric height estimate (cm)"),
+    "pitch": Gauge("ras_pitch_deg", "Pitch angle (degrees)"),
+    "roll": Gauge("ras_roll_deg", "Roll angle (degrees)"),
+    "yaw": Gauge("ras_yaw_deg", "Yaw angle (degrees)"),
+    "vgx": Gauge("ras_velocity_x_cm_s", "Velocity, X axis (cm/s)"),
+    "vgy": Gauge("ras_velocity_y_cm_s", "Velocity, Y axis (cm/s)"),
+    "vgz": Gauge("ras_velocity_z_cm_s", "Velocity, Z axis (cm/s)"),
+    "time": Gauge("ras_motor_on_seconds", "Cumulative motor-on time (s)"),
+    "agx": Gauge("ras_accel_x", "Acceleration, X axis (0.001g)"),
+    "agy": Gauge("ras_accel_y", "Acceleration, Y axis (0.001g)"),
+    "agz": Gauge("ras_accel_z", "Acceleration, Z axis (0.001g)"),
+}
+SNR_GAUGE = Gauge("ras_wifi_snr_db", "Wi-Fi signal-to-noise ratio (dB)")
+SNR_AGE_GAUGE = Gauge("ras_wifi_snr_age_seconds", "Age of the last successful SNR reading (s)")
+POLL_OK = Gauge("ras_last_poll_success", "1 if the last poll of the drone succeeded, 0 otherwise")
+STEP_GAUGE = Gauge("ras_manoeuvre_step", "Index of the manoeuvre step currently executing")
+
+# --- Manoeuvre script -------------------------------------------------------
+# Each entry is (label, action). The cycle body repeats until the session
+# duration or the battery floor is reached, so every session flies the same
+# sequence and differs only in how many cycles it completes.
+
+def _cycle(tello, dry, mode="baseline"):
+    """One repetition of the manoeuvre body for the given mode."""
+    if mode == "link":
+        # Stationary hover only. The operator creates the fault by walking away
+        # with the controller, so the aircraft must not add its own movement.
+        return [("hover_hold", lambda: time.sleep(20))]
+
+    if mode == "thermal":
+        # No hover rest anywhere in the cycle: the rotors never get an idle
+        # segment, which is what drives the thermal load. Distances are kept
+        # short so this stays flyable in the same indoor space as the baseline.
+        return [
+            ("thermal_fwd", lambda: (_cmd(tello, dry, "move_forward", 50),
+                                     _cmd(tello, dry, "move_back", 50))),
+            ("thermal_lat", lambda: (_cmd(tello, dry, "move_left", 50),
+                                     _cmd(tello, dry, "move_right", 50))),
+            ("thermal_rot", lambda: (_cmd(tello, dry, "rotate_clockwise", 360),
+                                     _cmd(tello, dry, "rotate_counter_clockwise", 360))),
+            ("thermal_vert", lambda: (_cmd(tello, dry, "move_up", 40),
+                                      _cmd(tello, dry, "move_down", 40))),
+        ]
+
+    # baseline, and battery depletion which reuses it so that the depletion run
+    # is flown under the same load profile the thresholds were derived from
+    return [
+        ("hover_1", lambda: time.sleep(15)),
+        ("translate", lambda: (_cmd(tello, dry, "move_forward", 80),
+                               _cmd(tello, dry, "move_back", 80))),
+        ("rotate", lambda: _cmd(tello, dry, "rotate_clockwise", 360)),
+        ("hover_2", lambda: time.sleep(15)),
+    ]
+
+
+CMD_LOCK = threading.Lock()
+
+
+def _cmd(tello, dry, name, *args):
+    """Send one flight command, serialised against the SNR query."""
+    if dry:
+        print(f"    [dry] {name}{args}")
+        time.sleep(3)
+        return
+    with CMD_LOCK:
+        getattr(tello, name)(*args)
+
+
+class SessionState:
+    """Shared state between the main thread and the logger thread."""
+
+    def __init__(self):
+        self.step_index = 0
+        self.step_label = "preflight"
+        self.snr_db = ""
+        self.snr_at = None
+        self.running = True
+        self.latest_battery = None
+
+
+def logger_thread(tello, state, writer, fh, start):
+    """Sample the state stream at 1 Hz and write one CSV row per sample."""
+    next_tick = time.time()
+    while state.running:
+        try:
+            s = tello.get_current_state()
+            ts = datetime.now(timezone.utc).isoformat()
+            elapsed = round(time.time() - start, 2)
+
+            if state.snr_at is None:
+                snr_age = ""
+            else:
+                snr_age = round(time.time() - state.snr_at, 2)
+                SNR_AGE_GAUGE.set(snr_age)
+
+            row = ([ts, elapsed, state.step_index, state.step_label]
+                   + [s.get(k, "") for k in FIELDS]
+                   + [state.snr_db, snr_age])
+            writer.writerow(row)
+            fh.flush()   # survive a crash mid-session
+
+            for field, gauge in GAUGES.items():
+                v = s.get(field)
+                if v is not None:
+                    gauge.set(float(v))
+            STEP_GAUGE.set(state.step_index)
+            POLL_OK.set(1)
+
+            if s.get("bat") is not None:
+                state.latest_battery = int(s["bat"])
+        except Exception as exc:                       # noqa: BLE001
+            print(f"  poll failed: {exc}")
+            POLL_OK.set(0)
+
+        next_tick += LOG_INTERVAL_SEC
+        time.sleep(max(0.0, next_tick - time.time()))
+
+
+def snr_thread(tello, state, dry):
+    """Poll Wi-Fi SNR on its own slower cadence, serialised behind CMD_LOCK."""
+    while state.running:
+        if dry:
+            state.snr_db, state.snr_at = "", None
+        else:
+            try:
+                if CMD_LOCK.acquire(timeout=1.0):
+                    try:
+                        value = tello.query_wifi_signal_noise_ratio()
+                    finally:
+                        CMD_LOCK.release()
+                    state.snr_db = value
+                    state.snr_at = time.time()
+                    try:
+                        SNR_GAUGE.set(float(value))
+                    except (TypeError, ValueError):
+                        pass
+            except Exception as exc:                   # noqa: BLE001
+                print(f"  snr query failed: {exc}")
+        time.sleep(SNR_INTERVAL_SEC)
+
+
+def prompt_metadata(tello, dry):
+    """Collect the session metadata the collection protocol requires."""
+    print("--- Session metadata (Enter to skip an optional field) ---")
+    meta = {}
+    meta["session_id"] = input("Session ID (e.g. BASE-01): ").strip() or "UNSET"
+    meta["venue"] = input("Venue: ").strip()
+    # No default here on purpose: an environment silently defaulting to "indoor"
+    # mislabelled four early sessions. Baseline and fault-injection runs must all
+    # share one environment, so this field has to be answered deliberately.
+    while True:
+        env = input("Environment (indoor / outdoor): ").strip().lower()
+        if env in ("indoor", "outdoor"):
+            meta["environment"] = env
+            break
+        print("  Type 'indoor' or 'outdoor'.")
+    meta["ambient_temp_c"] = input("Ambient temperature (C): ").strip()
+    meta["battery_id"] = input("Battery identifier (e.g. B2): ").strip()
+    meta["battery_cycles"] = input("Approx. battery cycle count: ").strip()
+    meta["operator_notes"] = input("Notes (optional): ").strip()
+
+    meta["started_iso"] = datetime.now(timezone.utc).isoformat()
+    meta["dry_run"] = dry
+    if not dry:
+        try:
+            meta["sdk_version"] = tello.query_sdk_version()
+            meta["serial_number"] = tello.query_serial_number()
+        except Exception as exc:                       # noqa: BLE001
+            print(f"  could not query SDK version / serial: {exc}")
+    return meta
+
+
+def write_metadata(path, meta):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["key", "value"])
+        for k, v in meta.items():
+            w.writerow([k, v])
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Phase 1 baseline flight session.")
+    ap.add_argument("--dry", action="store_true",
+                    help="do not fly: connect, log and export only")
+    ap.add_argument("--duration", type=int, default=DEFAULT_DURATION_SEC,
+                    help=f"max session seconds (default {DEFAULT_DURATION_SEC})")
+    ap.add_argument("--battery-floor", type=int, default=DEFAULT_BATTERY_FLOOR,
+                    help=f"land at or below this %% (default {DEFAULT_BATTERY_FLOOR})")
+    ap.add_argument("--mode", choices=sorted(MODES), default="baseline",
+                    help="baseline (Phase 1) or a Phase 2 fault class")
+    args = ap.parse_args()
+
+    # Mode overrides win over the defaults, but an explicitly passed flag still
+    # wins over the mode, so a single run can be adjusted without editing MODES.
+    cfg = MODES[args.mode]
+    passed = set(sys.argv[1:])
+    if cfg["duration"] is not None and not {"--duration"} & passed:
+        args.duration = cfg["duration"]
+    if cfg["floor"] is not None and not {"--battery-floor"} & passed:
+        args.battery_floor = cfg["floor"]
+
+    SESSION_DIR.mkdir(exist_ok=True)
+
+    tello = Tello()
+    print("Connecting to Tello...")
+    tello.connect()
+    battery = tello.get_battery()
+    print(f"Connected. Battery: {battery}%")
+
+    if not args.dry and battery < MIN_TAKEOFF_BATTERY:
+        print(f"Battery {battery}% is below the {MIN_TAKEOFF_BATTERY}% session "
+              f"minimum. Swap the battery and rerun.")
+        sys.exit(1)
+
+    if not args.dry and args.mode != "thermal":
+        try:
+            temp = tello.get_highest_temperature()
+        except Exception:                                  # noqa: BLE001
+            temp = None
+        if temp is not None:
+            print(f"Onboard temperature: {temp} C")
+            if temp > MAX_TAKEOFF_TEMP_C:
+                print(f"\nThe aircraft has not cooled. {temp} C is above the "
+                      f"{MAX_TAKEOFF_TEMP_C} C session maximum.")
+                print("A warm start sits above the derived temperature ceiling "
+                      "for the first seconds of flight, which fires the alert "
+                      "on a healthy aircraft and makes the session unusable.")
+                print("Leave it powered off for around 30 minutes and rerun. "
+                      "(Thermal fault runs skip this check by design.)")
+                sys.exit(1)
+
+    print(f"\nMode: {args.mode}   "
+          f"(duration {args.duration}s, battery floor {args.battery_floor}%)")
+    if args.mode == "battery":
+        print("  The harness will not land the aircraft. The Tello's own "
+              "low-battery failsafe ends this run - that is the measurement.")
+    if args.mode == "link":
+        print("  Press ENTER the moment you start walking away. That writes "
+              "t_induce to the events log.")
+    if args.mode == "thermal":
+        print("  Fly these back to back with no cool-down. A cooled aircraft "
+              "will not reach the fault condition.")
+    print(f"  Suggested session ID prefix: {MODES[args.mode]['prefix']}-01\n")
+
+    meta = prompt_metadata(tello, args.dry)
+    meta["battery_at_start"] = battery
+    meta["mode"] = args.mode
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = SESSION_DIR / f"{meta['session_id']}_{stamp}"
+    tel_path = base.with_name(base.name + "_telemetry.csv")
+    evt_path = base.with_name(base.name + "_events.csv")
+    met_path = base.with_name(base.name + "_metadata.csv")
+
+    start_http_server(SCRAPE_PORT)
+    print(f"\nExporting to http://localhost:{SCRAPE_PORT}/metrics")
+    print(f"Telemetry -> {tel_path.name}")
+    print(f"Events    -> {evt_path.name}")
+    print("Confirm http://localhost:9090/targets shows ras_drone_live UP, "
+          "then leave this window alone.\n")
+
+    state = SessionState()
+    start = time.time()
+
+    tel_fh = open(tel_path, "w", newline="")
+    evt_fh = open(evt_path, "w", newline="")
+    tel_w = csv.writer(tel_fh)
+    evt_w = csv.writer(evt_fh)
+    tel_w.writerow(CSV_HEADER)
+    evt_w.writerow(["timestamp_iso", "elapsed_sec", "event", "detail"])
+
+    def mark(event, detail=""):
+        evt_w.writerow([datetime.now(timezone.utc).isoformat(),
+                        round(time.time() - start, 2), event, detail])
+        evt_fh.flush()
+        print(f"  [{round(time.time() - start):>4}s] {event} {detail}")
+
+    def marker_thread():
+        """Write an operator_marker every time ENTER is pressed.
+
+        The protocol needs t_induce, the moment the operator began inducing the
+        fault. For battery and thermal runs the script knows when it changed
+        mode, but for link degradation only the operator knows when they started
+        walking, so it has to be entered by hand while the aircraft is flying.
+        """
+        while state.running:
+            try:
+                line = sys.stdin.readline()
+            except Exception:                              # noqa: BLE001
+                return
+            if not line:
+                return
+            if state.running:
+                mark("operator_marker", line.strip() or "t_induce")
+
+    lt = threading.Thread(target=logger_thread,
+                          args=(tello, state, tel_w, tel_fh, start), daemon=True)
+    mt = threading.Thread(target=marker_thread, daemon=True)
+    mt.start()
+    st = threading.Thread(target=snr_thread, args=(tello, state, args.dry),
+                          daemon=True)
+    lt.start()
+    st.start()
+    time.sleep(2)   # let a few samples land before the drone moves
+
+    mark("session_start", f"battery={battery}%")
+    step_no = 0
+    try:
+        state.step_index, state.step_label = step_no, "takeoff"
+        mark("step_begin", "takeoff")
+        _cmd(tello, args.dry, "takeoff")
+        mark("step_end", "takeoff")
+
+        speed = MODES[args.mode]["speed"]
+        if speed is not None:
+            _cmd(tello, args.dry, "set_speed", speed)
+            mark("speed_set", f"{speed} cm/s")
+
+        cycle = 0
+        while True:
+            elapsed = time.time() - start
+            if elapsed >= args.duration:
+                mark("stop_reason", f"duration {args.duration}s reached")
+                break
+            if (args.battery_floor > 0 and state.latest_battery is not None
+                    and state.latest_battery <= args.battery_floor):
+                mark("stop_reason", f"battery floor {args.battery_floor}% reached")
+                break
+
+            cycle += 1
+            mark("cycle_begin", str(cycle))
+            for label, action in _cycle(tello, args.dry, args.mode):
+                # Check the floor between steps, not only between cycles. At the
+                # observed depletion rates a full cycle can carry the battery
+                # several percent past the floor and into the Tello's own
+                # auto-land failsafe, which would contaminate a baseline session.
+                if (args.battery_floor > 0 and state.latest_battery is not None
+                        and state.latest_battery <= args.battery_floor):
+                    mark("stop_reason", f"battery floor {args.battery_floor}% reached mid-cycle")
+                    raise StopIteration
+                step_no += 1
+                state.step_index, state.step_label = step_no, label
+                mark("step_begin", label)
+                action()
+                mark("step_end", label)
+            mark("cycle_end", str(cycle))
+
+    except StopIteration:
+        pass
+    except KeyboardInterrupt:
+        mark("operator_abort", "Ctrl+C")
+    except Exception as exc:                           # noqa: BLE001
+        # In battery mode the aircraft's own failsafe lands it mid-flight, after
+        # which every command fails. That is the expected end of the run and the
+        # thing being measured, so it is recorded as an outcome, not a fault in
+        # the harness.
+        if args.mode == "battery":
+            mark("failsafe_engaged", str(exc))
+            print(f"\nAircraft failsafe ended the run: {exc}")
+        else:
+            mark("error", str(exc))
+            print(f"\nSession error: {exc}")
+    finally:
+        step_no += 1
+        state.step_index, state.step_label = step_no, "land"
+        mark("step_begin", "land")
+        try:
+            if not args.dry:
+                with CMD_LOCK:
+                    tello.land()
+        except Exception as exc:                       # noqa: BLE001
+            print(f"  land failed: {exc} — land manually if still airborne")
+            mark("land_failed", str(exc))
+        mark("step_end", "land")
+
+        time.sleep(3)                     # capture post-landing samples
+        state.step_index, state.step_label = step_no + 1, "postflight"
+        time.sleep(2)
+        state.running = False
+        lt.join(timeout=3)
+
+        end_battery = state.latest_battery
+        mark("session_end", f"battery={end_battery}%")
+        meta["battery_at_end"] = end_battery
+        meta["ended_iso"] = datetime.now(timezone.utc).isoformat()
+        meta["duration_sec"] = round(time.time() - start, 2)
+        write_metadata(met_path, meta)
+
+        tel_fh.close()
+        evt_fh.close()
+        print(f"\nSession complete. Duration {meta['duration_sec']}s, "
+              f"battery {battery}% -> {end_battery}%.")
+        print(f"Files written to {SESSION_DIR}")
+
+
+if __name__ == "__main__":
+    main()

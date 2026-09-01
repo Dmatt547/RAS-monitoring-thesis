@@ -1,0 +1,6 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FLIGHT-02_20260830_164157,,DroneLowBattery,,,,,,0,-
+FLIGHT-02_20260830_164157,,DroneOverTemperature,4.0,2026-08-30T06:42:14.812817+00:00,,,,0,onset only
+FLIGHT-02_20260830_164157,,DroneUnstableAttitude,,,,,,1,-
+FLIGHT-02_20260830_164157,,DroneBarometricDrift,,,,,,1,-
+FLIGHT-02_20260830_164157,,DronePollFailure,,,,,,0,-

@@ -1,0 +1,20 @@
+{
+  "sessions": 5,
+  "pooled_in_flight_samples": 1274,
+  "rolling_window_sec": 5,
+  "drift_window_sec": 60,
+  "airborne_tof_cm": 20,
+  "battery_percent_min": 31.0,
+  "battery_worst_rate_pct_per_min": 10.5,
+  "temph_max": 64.0,
+  "temph_settle_tail_sec": 90,
+  "temph_p1_not_used": null,
+  "templ_max": 60.0,
+  "baro_drift_max": null,
+  "pitch_sd_max": 3.87,
+  "roll_sd_max": 1.2,
+  "depletion_rate_by_battery": {
+    "B1": 7.25,
+    "B2": 10.5
+  }
+}

@@ -1,0 +1,562 @@
+% =====================================================================
+%  Chapter 5 - RQ2. Replaces the "RQ2 Planning" chapter entirely.
+%  Structure follows Chapter 4: Aim, Implementation, Experimental Setup,
+%  Results, Analysis, Answer. Results is divided three ways because RQ2
+%  has three sub-questions and the experiment has three phases.
+%
+%  Values marked [PENDING] come from Phase 2 and are not yet collected.
+%  Everything else is measured, from the five baseline sessions.
+% =====================================================================
+
+\section{Autonomous Threshold-Based Fault Detection on a Physical Remote
+Autonomous System (RQ2)}\label{sec:rq2}
+
+\subsection{Aim}\label{sec:rq2-aim}
+
+RQ2 asks: \emph{How can system metrics such as battery level, connectivity and
+performance be used to detect faults in remote autonomous systems?} Study 1
+established that the pipeline can observe health state, but the health state it
+observed was supplied by a dataset label rather than computed from the
+telemetry. This chapter removes that dependency. The same pipeline is connected
+to a physical DJI Tello, each threshold is derived from the aircraft's own
+measured baseline, and Prometheus alerting rules determine health state from raw
+readings with no labels available to them.
+
+This section documents the instrument built for that purpose, the three-phase
+experiment carried out with it, and the results measured against the criteria
+fixed in Section~\ref{tab:eval-rq2}. The phases correspond to the three
+sub-questions. Phase 1 derives the thresholds and answers RQ2.1, Phase 2 tests
+whether the rules detect induced faults and answers RQ2.2, and Phase 3
+quantifies detection latency and false positive rate for RQ2.3.
+
+% =====================================================================
+\subsection{Implementation}\label{sec:rq2-impl}
+
+Study 2 required three capabilities that Study 1 did not: repeatable physical
+flights, thresholds computed from measured data, and alert timings that can be
+recovered after a run has finished. Each is provided by a separate tool, and all
+are published in the project repository.
+
+\subsubsection{Session Harness}\label{sec:rq2-harness}
+
+\texttt{flight\_session.py} is the instrument used for every physical flight. A
+single process performs three jobs, because the Tello accepts one SDK client at
+a time and a second client competing for the same UDP ports would prevent both
+from working.
+
+\begin{enumerate}
+    \item It flies a fixed manoeuvre script consisting of take-off, hover,
+    translation, rotation, hover and land, so that variation between sessions
+    reflects the platform rather than the pilot.
+    \item It records raw telemetry to a CSV file at \SI{1}{\hertz} and tags
+    every sample with the manoeuvre step that was executing when the sample was
+    taken.
+    \item It publishes the same readings to Prometheus on port 8001.
+\end{enumerate}
+
+Manual piloting was considered and rejected. Three repetitions of a fault must
+be the same fault for the repetitions to be meaningful, and hand-flown runs
+would introduce operator variation into every measurement. The single-client
+constraint also rules it out in practice, since flying from the mobile
+application would occupy the connection the exporter requires.
+
+The harness writes a separate event log containing manoeuvre boundaries, stop
+reasons and operator markers. Pressing \textsc{Enter} during a flight records
+$t_{\text{induce}}$. This is necessary for the link degradation runs, because
+only the operator knows the moment at which they began increasing separation.
+
+Four modes are provided. The \texttt{baseline} mode flies the Phase 1 script.
+The \texttt{battery} mode disables the harness's own landing so that the
+aircraft's low-battery failsafe ends the run, since that failsafe is the object
+of measurement rather than a constraint to be avoided. The \texttt{thermal} mode
+flies continuously at \SI{100}{\centi\metre\per\second} with no hover segment.
+The \texttt{link} mode holds a stationary hover while the operator moves.
+
+Two pre-flight checks refuse to begin a session that could not be compared with
+the others. The first rejects a battery below \SI{80}{\percent} and the second,
+which is skipped for thermal runs, rejects an onboard temperature above
+\SI{60}{\celsius}. Both were added after sessions were lost to those conditions,
+and the reasoning behind the second is given in Section~\ref{sec:rq2-thresholds}.
+
+\subsubsection{Metric Set and Platform Constraints}\label{sec:rq2-metrics}
+
+The fields the Tello exposes are listed in Table~\ref{tab:tello-fields}.
+Baseline collection established that several of them behave differently from
+what their SDK field names imply, and those findings are reported in
+Section~\ref{sec:rq2-platform}. The metric set carried through to the alerting
+rules is battery percentage, onboard temperature, attitude, barometric height
+and target liveness.
+
+\subsubsection{Alerting Rules}\label{sec:rq2-rules}
+
+Fault detection is performed entirely by Prometheus alerting rules evaluated
+against the raw metrics. No metric published by the exporter is a health label,
+and there is no equivalent of the \texttt{ras\_health\_status} metric used in
+Study 1. Every rule carries a \texttt{for: 5s} hold, so that a single sample
+crossing a threshold cannot raise an alert. The rules are presented in
+Section~\ref{sec:rq2-thresholds} together with the values derived for them.
+
+\subsubsection{Analysis Tooling}\label{sec:rq2-tooling}
+
+Three further scripts make the results reproducible from the archived logs.
+
+\begin{itemize}
+    \item \texttt{check\_session.py} validates a session immediately after
+    landing. It checks sample coverage against the expected \SI{1}{\hertz},
+    gaps between samples, battery monotonicity, SNR coverage, manoeuvre
+    completeness and metadata. A session that fails is re-flown rather than
+    retained.
+    \item \texttt{derive\_thresholds.py} pools the baseline sessions, applies
+    the derivation rules given in Table~\ref{tab:threshold-rules}, and writes
+    both the Prometheus rules file and a machine-readable copy of the same
+    values.
+    \item \texttt{collect\_alerts.py} recovers alert firing times from the
+    \texttt{ALERTS} series that Prometheus maintains for its own alert state,
+    computes threshold-crossing times from the telemetry log, and reports
+    detection latency. Both calculations read the machine-readable threshold
+    file, so the onset calculation and the alerting rules cannot diverge.
+\end{itemize}
+
+% =====================================================================
+\subsection{Experimental Setup}\label{sec:rq2-setup}
+
+\subsubsection{Platform and Environment}\label{sec:rq2-platform-setup}
+
+All sessions used a single DJI Tello, serial number 0TQZGAJED007GD, flown
+indoors at a private residence at an ambient temperature of \SI{21}{\celsius}.
+One airframe was used throughout so that the thresholds and the fault runs refer
+to the same unit. The consequences of that decision are addressed in
+Section~\ref{subsec:method-threats}.
+
+Two batteries, designated B1 and B2, were alternated between sessions so that
+battery identity would not coincide with session order. Prometheus, Grafana, the
+harness and the exporter all ran on a single host, so every timestamp comes from
+one system clock and clock synchronisation between devices cannot introduce
+measurement error. The scrape interval and the rule evaluation interval were
+both set to \SI{1}{\second}.
+
+\subsubsection{Session Protocol}\label{sec:rq2-protocol}
+
+Each session ran for four minutes and began on a fully charged battery, with the
+aircraft returned to ambient temperature beforehand. Four-minute sessions sample
+only the upper region of the discharge curve. The lower region, approaching the
+automatic low-battery landing, is characterised instead by the Phase 2 depletion
+runs, which continue until that failsafe engages.
+
+Lighting was controlled alongside ambient temperature. The Tello holds position
+using a downward-facing camera and a time-of-flight sensor, and a session
+attempted in a dimly lit room produced erratic readings and uncommanded drift.
+That result is reported in Section~\ref{subsec:method-threats}.
+
+\subsubsection{Experimental Runs}\label{sec:rq2-runs}
+
+Table~\ref{tab:rq2-runs} lists every run in the study. Sessions excluded from
+analysis are retained in the repository with the reason for exclusion recorded,
+following the reliability commitment stated in Section~\ref{subsec:method-threats}.
+
+\begin{table}[htbp]
+\centering
+\caption{Study 2 Experimental Runs}
+\label{tab:rq2-runs}
+\small
+\begin{tabular}{|l|l|l|p{5.0cm}|l|}
+\hline
+\textbf{Phase} & \textbf{Runs} & \textbf{Mode} & \textbf{Purpose} & \textbf{Sub-question} \\
+\hline
+1 & BASE-01--05 & baseline & Characterise normal operation and derive thresholds & RQ2.1 \\
+\hline
+-- & FP-01--03 & baseline & Held-out normal flights for the false positive rate & RQ2.3 \\
+\hline
+2 & FAULT-BAT-01--03 & battery & Flight continues until the low-battery failsafe engages & RQ2.2, RQ2.3 \\
+\hline
+2 & FAULT-LINK-01--03 & link & Operator increases separation and obstructs line of sight & RQ2.2, RQ2.3 \\
+\hline
+2 & FAULT-THERM-01--03 & thermal & Consecutive sorties flown without a cool-down interval & RQ2.2, RQ2.3 \\
+\hline
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\subsection{Phase 1 Results: Baseline Characterisation
+(RQ2.1)}\label{sec:rq2-phase1}
+
+\subsubsection{Session Summary}\label{sec:rq2-sessions}
+
+Five baseline sessions were flown and all five passed validation, producing 1274
+pooled in-flight samples. Table~\ref{tab:baseline-sessions} summarises them.
+Sample coverage was \SI{100}{\percent} in every session and no gap between
+consecutive samples exceeded \SI{1.1}{\second}, so the distributions reported
+below are computed from complete data.
+
+\begin{table}[htbp]
+\centering
+\caption{Phase 1 Baseline Sessions}
+\label{tab:baseline-sessions}
+\small
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\textbf{Session} & \textbf{Battery} & \textbf{Ambient} & \textbf{Duration} &
+\textbf{Battery span} & \textbf{Depletion} & \textbf{In-flight temp} \\
+ & & (\si{\celsius}) & (s) & (\%) & (\%/min) & (\si{\celsius}) \\
+\hline
+BASE-01 & B1 & 21 & 271 & 100--66 & 7.53 & 56--63 \\
+BASE-02 & B2 & 21 & 270 & 88--40 & 10.67 & 57--62 \\
+BASE-03 & B1 & 21 & 273 & 100--66 & 7.47 & 56--62 \\
+BASE-04 & B2 & 21 & 273 & 92--45 & 10.33 & 61--65 \\
+BASE-05 & B1 & 21 & 275 & 100--69 & 6.76 & 58--63 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsubsection{Platform Behaviour}\label{sec:rq2-platform}
+
+Baseline collection produced six findings about the platform, each of which
+changes how the metric concerned can be used. They are reported here rather than
+in the analysis because they form part of the answer to RQ2.1: establishing
+which metrics represent operational health requires knowing how those metrics
+actually behave, and on this platform several of them do not behave as their
+field descriptions suggest.
+
+\paragraph{Onboard temperature settles toward an operating point.} Temperature
+does not vary about a fixed mean during a session. It converges toward a steady
+operating value of approximately \SI{62}{\celsius}, and the direction of change
+depends on where the aircraft starts. Sessions beginning at ambient warmed from
+\SI{55}{}--\SI{58}{\celsius} to \SI{62}{\celsius} over four minutes. Session
+BASE-04, which began at \SI{65}{\celsius} because it followed an earlier flight,
+cooled to the same point instead. Table~\ref{tab:temp-settling} shows the
+progression.
+
+\begin{table}[htbp]
+\centering
+\caption{Onboard Temperature by Elapsed Flight Time (\si{\celsius})}
+\label{tab:temp-settling}
+\small
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\textbf{Session} & \textbf{Start} & \SI{0.5}{min} & \SI{1}{min} &
+\SI{2}{min} & \SI{3}{min} & \SI{4}{min} \\
+\hline
+BASE-01 & 55 & 58.8 & 60.3 & 61.8 & 62.2 & 62.5 \\
+BASE-02 & 58 & 58.1 & 59.5 & 60.2 & 61.3 & 61.5 \\
+BASE-03 & 56 & 58.2 & 59.5 & 60.7 & 61.2 & 61.9 \\
+BASE-04 & 65 & 62.3 & 62.1 & 62.5 & 62.9 & 62.8 \\
+BASE-05 & 58 & 60.2 & 60.7 & 61.9 & 62.1 & 62.2 \\
+\hline
+\end{tabular}
+\end{table}
+
+Two consequences follow. The first concerns the assumed threshold carried into
+Study 2. A ceiling of \SI{60}{\celsius}, taken from industrial motor-monitoring
+practice, sits below the operating point the aircraft reaches in normal flight,
+so the rule fires on every healthy session once the airframe has warmed. That
+is the false positive observed during preliminary testing.
+
+The second concerns the derivation rule, and is treated in
+Section~\ref{sec:rq2-thresholds}. Because a four-minute session spends most of
+its samples in the warm-up transient rather than at the operating point, a
+percentile taken over the whole session does not describe steady operation.
+
+\paragraph{Barometric readings track atmospheric pressure rather than altitude.}
+Absolute barometer values moved by approximately \SI{20}{\centi\metre} between
+flight days and by \SI{3.6}{\centi\metre} between sessions flown in a single
+room. The aircraft's actual ground clearance was unchanged over the same period.
+A threshold expressed as an absolute band would therefore encode the prevailing
+weather rather than any property of the aircraft. The metric is usable only as
+within-session drift, and Section~\ref{sec:rq2-thresholds} derives it that way.
+
+\paragraph{Reported height is a derived quantity, not a measured one.} The
+median value returned by \texttt{get\_height()} fell from \SI{60}{\centi\metre}
+to \SI{30}{\centi\metre} across successive sessions and reached
+\SI{-40}{\centi\metre}, while time-of-flight ground clearance held between
+\SI{77}{} and \SI{78}{\centi\metre} throughout. The aircraft maintained
+altitude and the sensor drifted. Height and barometer are therefore treated as
+drift indicators and time-of-flight as the altitude signal, which reverses the
+roles assigned to them in Table~\ref{tab:tello-fields}. The reassignment follows
+from measured behaviour rather than from the SDK documentation.
+
+\paragraph{Battery identity dominates the depletion rate.} Battery B1 depleted
+at a mean rate of \SI{7.25}{\percent\per\minute} across three sessions, with
+individual runs at 7.53, 7.47 and \SI{6.76}{\percent\per\minute}. Battery B2
+depleted at \SI{10.50}{\percent\per\minute} across two sessions, at 10.67 and
+\SI{10.33}{\percent\per\minute}. The two distributions do not overlap. B2 also
+never charged above \SI{92}{\percent} while B1 reached \SI{100}{\percent} in
+every session, which gives a second and independent indication of a degraded
+cell. A single depletion threshold cannot describe both batteries, so the
+derivation in Section~\ref{sec:rq2-thresholds} takes the worse of the two.
+Alternating batteries between sessions is what made the difference visible.
+
+\paragraph{Wi-Fi SNR carries no usable variance.} The metric returned a constant
+value of 90 across all 1274 in-flight samples. A percentile of a constant is
+that constant, so the derivation rule for bounded metrics degenerates and no
+threshold can be established. SNR is additionally exposed as a command-channel
+query rather than as part of the broadcast state stream, so it cannot be sampled
+at \SI{1}{\hertz} without contending with flight commands. It was polled at
+\SI{5}{\second} intervals and carried forward between polls, with the staleness
+of each carried value recorded alongside it.
+
+\paragraph{Velocity fields are uninformative at the sampling rate used.}
+Reported velocity remained close to zero even during commanded translation,
+because each movement completes between samples. The manoeuvre is instead
+visible in attitude, where pitch reaches \SI{8}{\degree} during translation
+compared with \SI{2}{\degree} in hover.
+
+\subsubsection{Derived Thresholds}\label{sec:rq2-thresholds}
+
+Table~\ref{tab:derived-thresholds} gives the threshold derived for each
+monitored metric, together with the metric class it belongs to in
+Table~\ref{tab:threshold-rules} and the derivation that produced it. Every value
+follows from a stated rule applied to the pooled baseline distribution and none
+is assumed.
+
+\begin{table}[htbp]
+\centering
+\caption{Thresholds Derived from Phase 1 Baseline Data}
+\label{tab:derived-thresholds}
+\footnotesize
+\begin{tabular}{|p{2.4cm}|p{2.2cm}|p{2.0cm}|p{6.4cm}|}
+\hline
+\textbf{Alert} & \textbf{Metric class} & \textbf{Value} & \textbf{Derivation} \\
+\hline
+DroneLowBattery & Monotonic & \SI{31}{\percent} &
+Firmware auto-land point of \SI{10}{\percent} plus two minutes of lead time at
+the worst observed depletion rate of \SI{10.50}{\percent\per\minute} \\
+\hline
+DroneOverTemperature & Settling & \SI{64}{\celsius} &
+99th percentile of the settled region, taken as the final \SI{90}{\second} of
+each session, applied in the high direction only \\
+\hline
+DroneUnstableAttitude & Variance & 3.87 pitch, 1.20 roll &
+99th percentile of the \SI{5}{\second} rolling standard deviation \\
+\hline
+DroneBarometricDrift & Drift & \SI{0.31}{\centi\metre} &
+99th percentile of the deviation from the metric's own \SI{60}{\second} rolling
+mean \\
+\hline
+DronePollFailure & Liveness & n/a &
+Binary. Missing data is itself the fault condition and no value is derived \\
+\hline
+\end{tabular}
+\end{table}
+
+Two of the rules required guards that the derivation itself made necessary, and
+both are stated here because they affect what the thresholds mean.
+
+The temperature rule is evaluated only while the aircraft is airborne, using the
+condition \texttt{ras\_tof\_cm > 20}. The thresholds are derived from in-flight
+samples, but \SI{12}{\percent} of ground samples in the baseline exceed the
+resulting ceiling on a healthy aircraft, for the reason given in
+Section~\ref{sec:rq2-platform}. Without the guard the rule fires before every
+take-off.
+
+The same rule is applied in one direction only. A two-sided rule using the 1st
+percentile of \SI{57}{\celsius} fires during the first seconds of healthy flight,
+while the aircraft is still below its operating temperature. Session BASE-01
+recorded \SI{56}{\celsius} for six consecutive seconds in that period, which
+exceeds the \SI{5}{\second} hold and would therefore have raised an alert. Since
+no mechanism on this platform produces an under-temperature fault, a lower bound
+contributes false positives without contributing any detection capability.
+Table~\ref{tab:threshold-rules} permits this by specifying the percentile per
+metric direction.
+
+The threshold is derived from the settled region rather than from the whole
+session, for the reason established in Section~\ref{sec:rq2-platform}. The
+distinction is not incidental. A percentile taken across all in-flight samples
+gives \SI{63}{\celsius}, which lies inside the \SI{62}{}--\SI{64}{\celsius}
+band the aircraft occupies once settled, because the warm-up transient
+contributes the majority of samples in a four-minute session and pulls the
+percentile down. That value was applied and a held-out normal flight crossed it,
+raising an alert on a healthy aircraft. Restricting the derivation to the final
+\SI{90}{\second} of each session gives \SI{64}{\celsius}, which no baseline
+session and no other held-out flight exceeds.
+
+The reasoning is the same one Table~\ref{tab:threshold-rules} already applies to
+battery level. A quantity that trends through a session by design is not
+described by a percentile of its distribution, because that distribution is
+dominated by the trend rather than by the operating state. Battery level trends
+downward and temperature trends toward an operating point, and neither is
+stationary in the sense the bounded rule assumes.
+
+The barometric drift rule is evaluated only once its entire \SI{60}{\second}
+window consists of airborne samples, using the condition
+\texttt{min\_over\_time(ras\_tof\_cm[60s]) > 20}. While the window is still
+filling after take-off its mean remains dominated by ground-level readings, and
+the deviation therefore measures that transition rather than the aircraft. The
+value reads \SI{0.68}{\centi\metre} immediately after take-off and settles below
+\SI{0.31}{\centi\metre} once the window is complete.
+
+\subsubsection{Assumed and Derived Thresholds Compared}\label{sec:rq2-assumed}
+
+Table~\ref{tab:assumed-vs-derived} sets the thresholds assumed before baseline
+collection against those derived from it. Both configurations are published in
+the repository so that the comparison can be verified.
+
+\begin{table}[htbp]
+\centering
+\caption{Assumed and Derived Thresholds Compared}
+\label{tab:assumed-vs-derived}
+\small
+\begin{tabular}{|p{2.6cm}|p{3.2cm}|p{3.4cm}|p{4.0cm}|}
+\hline
+\textbf{Condition} & \textbf{Assumed} & \textbf{Derived} & \textbf{Consequence of the assumed value} \\
+\hline
+Low battery & $<\SI{15}{\percent}$ & $<\SI{31}{\percent}$ &
+Leaves under \SI{30}{\second} of lead time before the failsafe at the observed
+depletion rate \\
+\hline
+Temperature & $>\SI{60}{\celsius}$ & $>\SI{63}{\celsius}$, airborne only &
+Fires during the healthy first seconds of every flight \\
+\hline
+Attitude & $|\text{pitch}|$ or $|\text{roll}| > \SI{30}{\degree}$ &
+\SI{5}{\second} rolling standard deviation $>$ 3.87 or 1.20 &
+Baseline attitude never exceeds \SI{8}{\degree}, so the rule cannot fire and
+detects nothing \\
+\hline
+\end{tabular}
+\end{table}
+
+The two failures are not equivalent, and the difference between them is worth
+stating. The assumed temperature rule produced a visible false positive and was
+noticed during preliminary testing. The assumed attitude rule produced no alerts
+at all, which is indistinguishable from correct operation until a fault occurs
+and is not detected. An assumed threshold can therefore fail in either
+direction, and only one of the two failure modes is self-announcing.
+
+% =====================================================================
+\subsection{Phase 2 Results: Fault Detection (RQ2.2)}\label{sec:rq2-phase2}
+
+% [PENDING] Complete after the nine fault runs.
+
+\subsubsection{Held-Out Normal Flights}\label{sec:rq2-fp}
+
+% [PENDING] FP-01 to FP-03. Report any alerts raised and the total flight time.
+
+\subsubsection{Battery Depletion}\label{sec:rq2-fault-battery}
+
+% [PENDING] Per run: t_onset, t_alert, and the lead time before the failsafe
+% engaged.
+
+\subsubsection{Link Degradation}\label{sec:rq2-fault-link}
+
+% [PENDING] Per run: t_induce, the behaviour of SNR, and whether
+% DronePollFailure was raised.
+
+\subsubsection{Thermal and Load Stress}\label{sec:rq2-fault-thermal}
+
+% [PENDING] Per run: starting temperature, in-flight range, alerts raised.
+
+\subsubsection{Detection Outcomes}\label{sec:rq2-confusion}
+
+% [PENDING] Confusion matrix across the nine runs, classifying each as a true
+% positive, a false negative or a misclassification. Detection rate against the
+% target of 8 of 9.
+
+% =====================================================================
+\subsection{Phase 3 Results: Evaluation (RQ2.3)}\label{sec:rq2-phase3}
+
+\subsubsection{Detection Latency}\label{sec:rq2-latency}
+
+% [PENDING] Median, interquartile range and maximum of t_alert minus t_onset
+% across all detected faults. State the two lower bounds alongside the result:
+% the 1 s scrape interval and the 5 s hold.
+
+\subsubsection{False Positive Rate}\label{sec:rq2-fp-rate}
+
+% [PENDING] False alerts per 10 minutes of normal flight, measured on the
+% held-out flights and on the pre-induction segment of each fault run.
+
+\subsubsection{Metric Coverage}\label{sec:rq2-coverage}
+
+% [PENDING] Proportion of monitored metrics present and non-stale, measured with
+% up and absent(). The baseline sessions achieved 100 percent sample coverage.
+
+\subsubsection{Evaluation Criteria Results}\label{sec:rq2-criteria}
+
+% [PENDING] Follow the format of Table 12 in Chapter 4.
+
+% =====================================================================
+\subsection{Analysis}\label{sec:rq2-analysis}
+
+The claim that Study 2 is built on is that thresholds must be derived from the
+platform rather than assumed, and the Phase 1 results support that claim
+independently of how the fault runs turn out. Of the three assumed thresholds
+carried into Study 2, one fired continuously during healthy operation and one
+could not fire at all. Neither was chosen carelessly. Both were conventional
+values for the quantity being measured, and what made them unsuitable was the
+platform they were applied to. The only way that became apparent was by
+measuring it.
+
+The platform findings reported in Section~\ref{sec:rq2-platform} extend the same
+point. Three of the fields listed in Table~\ref{tab:tello-fields} do not behave
+as their names imply. Temperature converges toward an operating point rather
+than varying about a mean, reported height is a derived value that drifts while
+true altitude is held, and velocity carries no information at a \SI{1}{\hertz}
+sampling rate. A study conducted entirely on replayed data would have inherited
+all three errors, because a dataset cannot contradict the description of its own
+fields. This is the practical difference between Study 1 and Study 2, and it is
+a difference in what the evidence is capable of showing rather than only in the
+platform used.
+
+A further observation concerns the derivation procedure itself rather than any
+individual threshold. Two metrics were initially placed in the wrong class in
+Table~\ref{tab:threshold-rules}, and in both cases the error was invisible until
+a threshold derived under the wrong rule was applied to a held-out flight.
+Barometric height was treated as bounded, but its absolute value tracks
+atmospheric pressure, so the derived band encoded the prevailing weather.
+Temperature was also treated as bounded, but it trends toward an operating point,
+so the derived ceiling sat below the range of normal steady operation. Both
+produced alerts on healthy aircraft, and neither was detectable from inspecting
+the derivation rule in isolation.
+
+This suggests that assigning a metric to the correct behavioural class is a
+larger source of error than the choice of percentile within a class. The
+literature reviewed in Section~\ref{sec:lit-thresholds} concentrates on
+threshold values and on the methods used to compute them, and gives less
+attention to the prior question of whether the quantity being thresholded is
+stationary at all. On this platform that question decided the outcome twice.
+Determining it required measuring the platform under normal operation, holding
+out further normal flights, and testing the derived thresholds against data that
+had taken no part in producing them.
+
+\subsubsection{Sensitivity to Ambient Temperature}\label{sec:rq2-ambient}
+
+The temperature threshold is expressed as an absolute value, which makes it
+sensitive to the ambient conditions under which the baseline was collected. All
+five baseline sessions were flown at an ambient temperature of
+\SI{21}{\celsius}, and their settled means fall between \SI{61.4}{} and
+\SI{62.8}{\celsius}. A held-out normal flight conducted in a room estimated to
+be \SI{1}{}--\SI{2}{\celsius} warmer settled at \SI{64.0}{\celsius}, above
+every baseline session and above the derived ceiling.
+
+The aircraft was in normal condition for that flight. It had cooled overnight,
+began on a fully charged battery, and its battery depletion rate
+(\SI{7.08}{\percent\per\minute}) and mean acceleration magnitude were within the
+baseline range, so there is no indication that it was working harder than in any
+other session. The most consistent explanation is that the ambient temperature
+displaces the whole operating band, approximately one degree for one degree.
+
+This is a limitation of absolute thermal thresholds rather than of the
+derivation procedure, and it constrains the conditions under which the derived
+value transfers. The methodology anticipates the mechanism, since ambient
+temperature is recorded per session precisely because it shifts the thermal
+baseline, but a baseline collected at a single ambient temperature cannot
+quantify the relationship. Characterising it would require baseline sessions
+across a range of ambient temperatures, or a rule expressed relative to a
+measured ambient reference, which the platform does not report. Both are
+identified as future work in Section~\ref{sec:future-work}.
+
+% [PENDING] Discussion of detection performance once Phase 2 is complete.
+% [PENDING] Comparison with the Study 1 result, and with the reviewed
+% literature, particularly Yousuf et al. (2024) on assumed thresholds and
+% Boncea and Bacivarov (2016) on Prometheus-based monitoring architecture.
+
+% =====================================================================
+\subsection{Answer to RQ2}\label{sec:rq2-answer}
+
+% [PENDING] Complete after Phases 2 and 3.
+%
+% Follow the structure of Section 4.6:
+%   1. Restate RQ2.
+%   2. State what the results show, sub-question by sub-question.
+%   3. Identify the mechanisms responsible for that outcome.
+%   4. State the limits of the claim, deferring the detail to Threats to
+%      Results.

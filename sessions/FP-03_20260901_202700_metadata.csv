@@ -1,0 +1,17 @@
+key,value
+session_id,FP-03
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B1
+battery_cycles,9
+operator_notes,
+started_iso,2026-09-01T10:27:00.292606+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,100
+mode,baseline
+battery_at_end,62
+ended_iso,2026-09-01T10:31:51.836462+00:00
+duration_sec,278.0

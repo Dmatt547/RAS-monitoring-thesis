@@ -1,4 +1,9 @@
 """
+ARCHIVED — superseded by flight_session.py, which does this plus scripted
+manoeuvres, CSV logging and event markers in one process. Kept because the
+RQ2 write-up describes it. Do not run it: it competes with flight_session.py
+for the drone, and the Tello accepts one SDK client at a time.
+
 RAS Live Telemetry Exporter — RQ2 (Physical Drone)
 
 Connects to a physical DJI Tello drone via the djitellopy SDK and exposes its

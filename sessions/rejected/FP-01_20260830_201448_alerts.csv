@@ -1,0 +1,6 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FP-01_20260830_201448,baseline,DroneLowBattery,,,,,,0,-
+FP-01_20260830_201448,baseline,DroneOverTemperature,3.0,2026-08-30T10:15:04.697037+00:00,,,,9,"MISSED - threshold crossed, no alert"
+FP-01_20260830_201448,baseline,DroneUnstableAttitude,,,,,,4,-
+FP-01_20260830_201448,baseline,DroneBarometricDrift,,,,,,1,-
+FP-01_20260830_201448,baseline,DronePollFailure,,,,,,0,-
