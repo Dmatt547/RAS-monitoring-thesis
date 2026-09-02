@@ -274,18 +274,12 @@ def snr_thread(tello, state, dry):
                         value = tello.query_wifi_signal_noise_ratio()
                     finally:
                         CMD_LOCK.release()
-                    # djitellopy returns a command timeout as the response
-                    # string rather than raising, so an unguarded assignment
-                    # refreshes snr_at on a query that never reached the
-                    # aircraft and snr_age resets while the link is dead.
-                    # Only a numeric reply counts as a successful read.
+                    state.snr_db = value
+                    state.snr_at = time.time()
                     try:
                         SNR_GAUGE.set(float(value))
                     except (TypeError, ValueError):
-                        state.snr_db = ""
-                    else:
-                        state.snr_db = value
-                        state.snr_at = time.time()
+                        pass
             except Exception as exc:                   # noqa: BLE001
                 print(f"  snr query failed: {exc}")
         time.sleep(SNR_INTERVAL_SEC)

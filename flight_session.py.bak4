@@ -80,7 +80,6 @@ DEFAULT_DURATION_SEC = 240    # 4 minutes (one session per battery)
 DEFAULT_BATTERY_FLOOR = 15    # land cleanly at or below this (%)
 MIN_TAKEOFF_BATTERY = 25      # refuse to start a session below this (%)
 STALE_SAMPLES_LIMIT = 3       # identical consecutive state reads => link presumed lost
-LINK_LOSS_STOP_SEC = 20       # end the session this long after the link is presumed lost
 THERMAL_AMPLITUDE_CM = 70     # vertical stroke, thermal mode
 THERMAL_BASE_CLIMB_CM = 20    # climb above takeoff hover before oscillating
 THERMAL_STROKES_PER_CYCLE = 4 # up/down strokes per logged cycle
@@ -199,7 +198,6 @@ class SessionState:
         self.snr_at = None
         self.running = True
         self.latest_battery = None
-        self.stale_since = None
 
 
 def logger_thread(tello, state, writer, fh, start):
@@ -246,10 +244,8 @@ def logger_thread(tello, state, writer, fh, start):
             if stale_count >= STALE_SAMPLES_LIMIT:
                 if stale_count == STALE_SAMPLES_LIMIT:
                     print(f"  telemetry stale for {stale_count}s - link presumed lost")
-                    state.stale_since = time.time()
                 POLL_OK.set(0)
             else:
-                state.stale_since = None
                 POLL_OK.set(1)
 
             if s.get("bat") is not None:
@@ -274,18 +270,12 @@ def snr_thread(tello, state, dry):
                         value = tello.query_wifi_signal_noise_ratio()
                     finally:
                         CMD_LOCK.release()
-                    # djitellopy returns a command timeout as the response
-                    # string rather than raising, so an unguarded assignment
-                    # refreshes snr_at on a query that never reached the
-                    # aircraft and snr_age resets while the link is dead.
-                    # Only a numeric reply counts as a successful read.
+                    state.snr_db = value
+                    state.snr_at = time.time()
                     try:
                         SNR_GAUGE.set(float(value))
                     except (TypeError, ValueError):
-                        state.snr_db = ""
-                    else:
-                        state.snr_db = value
-                        state.snr_at = time.time()
+                        pass
             except Exception as exc:                   # noqa: BLE001
                 print(f"  snr query failed: {exc}")
         time.sleep(SNR_INTERVAL_SEC)
@@ -486,16 +476,6 @@ def main():
             if (args.battery_floor > 0 and state.latest_battery is not None
                     and state.latest_battery <= args.battery_floor):
                 mark("stop_reason", f"battery floor {args.battery_floor}% reached")
-                break
-
-            # A lost link leaves the aircraft to its own auto-land while the
-            # harness keeps issuing commands into a dead socket, so the run has
-            # to end itself. The delay lets the liveness alert fire and be
-            # scraped before the session closes.
-            if (state.stale_since is not None
-                    and time.time() - state.stale_since >= LINK_LOSS_STOP_SEC):
-                mark("stop_reason",
-                     f"link lost, telemetry stale {LINK_LOSS_STOP_SEC}s")
                 break
 
             cycle += 1
