@@ -1,0 +1,2 @@
+timestamp_iso,elapsed_sec,step_index,step_label,bat,time,h,tof,baro,templ,temph,pitch,roll,yaw,vgx,vgy,vgz,agx,agy,agz,snr_db,snr_age_sec
+2026-09-02T06:13:09.897811+00:00,0.02,0,preflight,100,0,0,10,109.11,53,56,-3,-1,0,0,0,0,-57.0,32.0,-997.0,,

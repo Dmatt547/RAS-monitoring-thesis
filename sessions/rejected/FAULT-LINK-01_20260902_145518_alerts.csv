@@ -1,0 +1,5 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FAULT-LINK-01_20260902_145518,link,DroneLowBattery,,,,,95.7,0,-
+FAULT-LINK-01_20260902_145518,link,DroneOverTemperature,,,,,95.7,8,-
+FAULT-LINK-01_20260902_145518,link,DroneUnstableAttitude,,,,,95.7,1,-
+FAULT-LINK-01_20260902_145518,link,DronePollFailure,,,10.0,,95.7,0,"fired, no onset in telemetry"

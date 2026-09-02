@@ -1,0 +1,5 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FAULT-LINK-01_20260902_151556,link,DroneLowBattery,,,,,78.8,0,-
+FAULT-LINK-01_20260902_151556,link,DroneOverTemperature,,,,,78.8,7,-
+FAULT-LINK-01_20260902_151556,link,DroneUnstableAttitude,,,,,78.8,0,-
+FAULT-LINK-01_20260902_151556,link,DronePollFailure,152.0,2026-09-02T05:18:41.805892+00:00,156.0,4.0,78.8,0,fired

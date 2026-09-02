@@ -1,0 +1,17 @@
+key,value
+session_id,FAULT-LINK-01
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B1
+battery_cycles,14
+operator_notes,
+started_iso,2026-09-02T05:07:20.360812+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,100
+mode,link
+battery_at_end,93
+ended_iso,2026-09-02T05:10:53.889402+00:00
+duration_sec,200.0

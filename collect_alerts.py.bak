@@ -174,43 +174,14 @@ def compute_onsets(rows, th):
     # No barometer rule: the sensor has no stable inter-session reference, so
     # no threshold is derived from it. See derive_thresholds.py.
 
-    # Liveness has no threshold: absent data is the condition. It presents two
-    # ways and both must be caught.
-    #
-    # The first is a gap in the 1 Hz log, which means the exporter could not
-    # poll the aircraft at all.
-    #
-    # The second is subtler and is what link loss actually produces. djitellopy
-    # serves get_current_state() from a dict that a background UDP thread
-    # refreshes, so when the link drops the reads keep succeeding against a
-    # frozen snapshot and the log continues at a full 1 Hz with no gap. The
-    # aircraft is gone but the telemetry looks healthy. An airborne drone never
-    # repeats a state exactly, because motor-on seconds increments every
-    # sample, so an unchanged state vector is the staleness signal. The count
-    # matches STALE_SAMPLES_LIMIT in flight_session.py so that the onset
-    # computed here corresponds to the moment the exporter set POLL_OK to 0.
-    STALE_SAMPLES_LIMIT = 3
-    META_COLS = {"timestamp_iso", "elapsed_sec", "step_index", "step_label",
-                 "snr_db", "snr_age_sec"}
-    state_cols = [c for c in (rows[0].keys() if rows else []) if c not in META_COLS]
-
+    # Liveness has no threshold: a missing sample is the condition. A gap in the
+    # 1 Hz log means the exporter could not poll the aircraft.
     gap = None
     for i in range(1, len(el)):
         if el[i] is not None and el[i - 1] is not None and el[i] - el[i - 1] > 2.0:
             gap = (iso[i], el[i])
             break
-
-    frozen = None
-    run = 0
-    for i in range(1, len(rows)):
-        same = all(rows[i].get(c) == rows[i - 1].get(c) for c in state_cols)
-        run = run + 1 if same else 0
-        if run >= STALE_SAMPLES_LIMIT:
-            frozen = (iso[i], el[i])
-            break
-
-    candidates = [c for c in (gap, frozen) if c and c[1] is not None]
-    onsets["liveness"] = min(candidates, key=lambda c: c[1]) if candidates else None
+    onsets["liveness"] = gap
     transients["liveness"] = 0
 
     return onsets, transients

@@ -1,0 +1,10 @@
+timestamp_iso,elapsed_sec,event,detail
+2026-09-02T04:52:57.012417+00:00,2.0,session_start,battery=93%
+2026-09-02T04:52:57.012782+00:00,2.0,step_begin,takeoff
+2026-09-02T04:53:03.375288+00:00,8.37,step_end,takeoff
+2026-09-02T04:53:03.375465+00:00,8.37,cycle_begin,1
+2026-09-02T04:53:03.375572+00:00,8.37,step_begin,hover_hold
+2026-09-02T04:53:22.158166+00:00,27.15,operator_abort,Ctrl+C
+2026-09-02T04:53:22.158731+00:00,27.15,step_begin,land
+2026-09-02T04:53:25.249232+00:00,30.24,step_end,land
+2026-09-02T04:53:31.012158+00:00,36.0,session_end,battery=77%
