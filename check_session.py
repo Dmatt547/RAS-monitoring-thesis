@@ -15,6 +15,7 @@ Exit code is 0 if the session passes, 1 if it fails.
 
 import argparse
 import csv
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -130,10 +131,20 @@ def validate(telemetry_path):
           "complete" if not missing else f"missing {sorted(missing)}")
 
     # --- events -------------------------------------------------------------
+    meta = {}
+    if meta_path.exists():
+        meta = {r["key"]: r["value"] for r in load(meta_path)}
     if events_path.exists():
         evs = load(events_path)
         stop = [e for e in evs if e["event"] == "stop_reason"]
-        aborts = [e for e in evs if e["event"] in ("operator_abort", "error", "land_failed")]
+        # In battery mode the aircraft lands itself when its failsafe engages, so
+        # the harness's own land command afterwards necessarily fails. That is
+        # the expected end of a depletion run, not an aborted session.
+        mode = meta.get("mode", "")
+        ignorable = {"land_failed"} if mode == "battery" else set()
+        aborts = [e for e in evs
+                  if e["event"] in ("operator_abort", "error", "land_failed")
+                  and e["event"] not in ignorable]
         c.add(not aborts, "clean session",
               "no aborts" if not aborts else f"{[a['event'] for a in aborts]}")
         if stop:
@@ -167,6 +178,16 @@ def validate(telemetry_path):
     return ok
 
 
+def _session_time(path):
+    """Sort key: the YYYYMMDD_HHMMSS stamp embedded in the filename.
+
+    Sorting the glob alphabetically ranks by session ID first, so FP-03 sorts
+    after FAULT-BAT-01 and "the newest session" resolves to the wrong run. The
+    timestamp is the only part of the name that orders sessions correctly.
+    """
+    m = re.search(r"_(\d{8}_\d{6})_", path.name)
+    return (m.group(1) if m else "", path.name)
+
 def main():
     ap = argparse.ArgumentParser(description="Validate a flight session.")
     ap.add_argument("session_id", nargs="?", help="e.g. BASE-01 (default: newest)")
@@ -177,7 +198,7 @@ def main():
         print(f"No sessions directory at {SESSION_DIR}")
         sys.exit(1)
 
-    files = sorted(SESSION_DIR.glob("*_telemetry.csv"))
+    files = sorted(SESSION_DIR.glob("*_telemetry.csv"), key=_session_time)
     if not files:
         print("No sessions found.")
         sys.exit(1)

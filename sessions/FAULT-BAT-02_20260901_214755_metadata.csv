@@ -1,0 +1,17 @@
+key,value
+session_id,FAULT-BAT-02
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B2
+battery_cycles,10
+operator_notes,
+started_iso,2026-09-01T11:47:55.003142+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,94
+mode,battery
+battery_at_end,9
+ended_iso,2026-09-01T11:55:50.519350+00:00
+duration_sec,462.0

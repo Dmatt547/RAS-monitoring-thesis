@@ -37,7 +37,7 @@ while logging is not possible.
     baseline   the Phase 1 manoeuvre script. 4 min, lands at the battery floor.
     battery    flies on until the Tello's own low-battery failsafe lands it.
                No duration limit and no floor: the failsafe is the measurement.
-    thermal    sustained rapid vertical oscillation, no hover rest. Run these
+    thermal    continuous high-speed manoeuvring with no hover rest. Run these
                back to back with no cool-down - baseline data showed that is
                what actually raises onboard temperature, not aggression alone.
     link       stationary hover while the operator walks away with the
@@ -79,10 +79,6 @@ SNR_INTERVAL_SEC = 5.0        # command-channel query, cannot run at 1 Hz
 DEFAULT_DURATION_SEC = 240    # 4 minutes (one session per battery)
 DEFAULT_BATTERY_FLOOR = 15    # land cleanly at or below this (%)
 MIN_TAKEOFF_BATTERY = 25      # refuse to start a session below this (%)
-STALE_SAMPLES_LIMIT = 3       # identical consecutive state reads => link presumed lost
-THERMAL_AMPLITUDE_CM = 70     # vertical stroke, thermal mode
-THERMAL_BASE_CLIMB_CM = 20    # climb above takeoff hover before oscillating
-THERMAL_STROKES_PER_CYCLE = 4 # up/down strokes per logged cycle
 MAX_TAKEOFF_TEMP_C = 60       # refuse to start unless the aircraft has cooled.
                               # Properly cooled baselines start at 55-58 C; a
                               # session flown 14 min after the previous one
@@ -150,18 +146,18 @@ def _cycle(tello, dry, mode="baseline"):
         return [("hover_hold", lambda: time.sleep(20))]
 
     if mode == "thermal":
-        # Sustained vertical oscillation. Climbing loads all four rotors
-        # simultaneously and at full throttle, which draws far more current
-        # than translation or rotation at the same speed, and reversing at the
-        # top and bottom of every stroke means the motors never settle into a
-        # steady hover draw. There is no idle segment anywhere in the cycle.
-        # Amplitude is 70 cm about the raised base altitude set at takeoff, so
-        # the bottom of each stroke stays well above the 20 cm ground clearance
-        # that the temperature rule is gated on.
+        # No hover rest anywhere in the cycle: the rotors never get an idle
+        # segment, which is what drives the thermal load. Distances are kept
+        # short so this stays flyable in the same indoor space as the baseline.
         return [
-            (f"thermal_vert_{n}", lambda: (_cmd(tello, dry, "move_up", THERMAL_AMPLITUDE_CM),
-                                           _cmd(tello, dry, "move_down", THERMAL_AMPLITUDE_CM)))
-            for n in range(1, THERMAL_STROKES_PER_CYCLE + 1)
+            ("thermal_fwd", lambda: (_cmd(tello, dry, "move_forward", 50),
+                                     _cmd(tello, dry, "move_back", 50))),
+            ("thermal_lat", lambda: (_cmd(tello, dry, "move_left", 50),
+                                     _cmd(tello, dry, "move_right", 50))),
+            ("thermal_rot", lambda: (_cmd(tello, dry, "rotate_clockwise", 360),
+                                     _cmd(tello, dry, "rotate_counter_clockwise", 360))),
+            ("thermal_vert", lambda: (_cmd(tello, dry, "move_up", 40),
+                                      _cmd(tello, dry, "move_down", 40))),
         ]
 
     # baseline, and battery depletion which reuses it so that the depletion run
@@ -203,8 +199,6 @@ class SessionState:
 def logger_thread(tello, state, writer, fh, start):
     """Sample the state stream at 1 Hz and write one CSV row per sample."""
     next_tick = time.time()
-    prev_state = None
-    stale_count = 0
     while state.running:
         try:
             s = tello.get_current_state()
@@ -228,25 +222,7 @@ def logger_thread(tello, state, writer, fh, start):
                 if v is not None:
                     gauge.set(float(v))
             STEP_GAUGE.set(state.step_index)
-
-            # djitellopy serves get_current_state() from a dict that a background
-            # UDP thread refreshes, so a lost link stops the updates without
-            # raising. Polling would keep reporting success against a frozen
-            # snapshot and the liveness rule would never fire. An airborne drone
-            # never repeats a state exactly, because motor-on seconds increments
-            # every sample, so an unchanged dict is the staleness signal.
-            if prev_state is not None and s == prev_state:
-                stale_count += 1
-            else:
-                stale_count = 0
-            prev_state = dict(s)
-
-            if stale_count >= STALE_SAMPLES_LIMIT:
-                if stale_count == STALE_SAMPLES_LIMIT:
-                    print(f"  telemetry stale for {stale_count}s - link presumed lost")
-                POLL_OK.set(0)
-            else:
-                POLL_OK.set(1)
+            POLL_OK.set(1)
 
             if s.get("bat") is not None:
                 state.latest_battery = int(s["bat"])
@@ -456,16 +432,6 @@ def main():
         if speed is not None:
             _cmd(tello, args.dry, "set_speed", speed)
             mark("speed_set", f"{speed} cm/s")
-
-        if args.mode == "thermal":
-            # Takeoff settles near 80 cm. Oscillating a 70 cm stroke from there
-            # would put the bottom of every stroke inside the 20 cm exclusion
-            # the temperature rule uses to ignore ground samples, which would
-            # suppress the very alert this run exists to trigger.
-            state.step_index, state.step_label = step_no, "thermal_base_climb"
-            mark("step_begin", "thermal_base_climb")
-            _cmd(tello, args.dry, "move_up", THERMAL_BASE_CLIMB_CM)
-            mark("step_end", "thermal_base_climb")
 
         cycle = 0
         while True:

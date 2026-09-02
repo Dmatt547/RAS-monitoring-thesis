@@ -1,0 +1,17 @@
+key,value
+session_id,WARM-01
+venue,Home
+environment,indoor
+ambient_temp_c,20
+battery_id,B1
+battery_cycles,12
+operator_notes,
+started_iso,2026-09-02T01:43:50.762924+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,100
+mode,baseline
+battery_at_end,87
+ended_iso,2026-09-02T01:46:27.265146+00:00
+duration_sec,143.0

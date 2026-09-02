@@ -1,0 +1,5 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FAULT-BAT-03_20260902_103217,battery,DroneLowBattery,,,,,,0,-
+FAULT-BAT-03_20260902_103217,battery,DroneOverTemperature,,,,,,0,-
+FAULT-BAT-03_20260902_103217,battery,DroneUnstableAttitude,26.0,2026-09-02T00:32:56.652744+00:00,,,,4,onset only
+FAULT-BAT-03_20260902_103217,battery,DronePollFailure,,,,,,0,-

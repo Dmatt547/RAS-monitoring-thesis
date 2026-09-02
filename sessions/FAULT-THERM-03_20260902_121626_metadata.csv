@@ -1,0 +1,17 @@
+key,value
+session_id,FAULT-THERM-03
+venue,Home
+environment,indoor
+ambient_temp_c,21
+battery_id,B2
+battery_cycles,13
+operator_notes,
+started_iso,2026-09-02T02:16:26.281631+00:00
+dry_run,False
+sdk_version,30
+serial_number,0TQZGAJED007GD
+battery_at_start,49
+mode,thermal
+battery_at_end,25
+ended_iso,2026-09-02T02:18:43.495912+00:00
+duration_sec,137.0

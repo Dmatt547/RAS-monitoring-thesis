@@ -1,0 +1,5 @@
+session,mode,alert,t_onset_elapsed_sec,t_onset_iso,t_alert_elapsed_sec,detection_latency_sec,t_induce_elapsed_sec,transient_crossings,outcome
+FAULT-THERM-03_20260902_121626,thermal,DroneLowBattery,115.0,2026-09-02T02:18:21.496089+00:00,121.0,6.0,,0,fired
+FAULT-THERM-03_20260902_121626,thermal,DroneOverTemperature,3.0,2026-09-02T02:16:29.495772+00:00,10.0,7.0,,0,fired
+FAULT-THERM-03_20260902_121626,thermal,DroneUnstableAttitude,,,,,,0,-
+FAULT-THERM-03_20260902_121626,thermal,DronePollFailure,,,,,,0,-

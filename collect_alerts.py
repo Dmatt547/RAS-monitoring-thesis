@@ -33,6 +33,7 @@ Writes <session>_alerts.csv beside the session's other files.
 
 import argparse
 import csv
+import re
 import json
 import statistics as st
 import sys
@@ -331,6 +332,16 @@ def analyse(telemetry_path, offline):
     print(f"\n  wrote {out_path.name}")
 
 
+def _session_time(path):
+    """Sort key: the YYYYMMDD_HHMMSS stamp embedded in the filename.
+
+    Sorting the glob alphabetically ranks by session ID first, so FP-03 sorts
+    after FAULT-BAT-01 and "the newest session" resolves to the wrong run. The
+    timestamp is the only part of the name that orders sessions correctly.
+    """
+    m = re.search(r"_(\d{8}_\d{6})_", path.name)
+    return (m.group(1) if m else "", path.name)
+
 def main():
     ap = argparse.ArgumentParser(description="Collect alerts and compute detection latency.")
     ap.add_argument("session_id", nargs="?", help="e.g. FAULT-BAT-01 (default: newest)")
@@ -343,7 +354,7 @@ def main():
         print(f"No {THRESHOLDS.name}. Run derive_thresholds.py first.")
         sys.exit(1)
 
-    files = sorted(SESSION_DIR.glob("*_telemetry.csv"))
+    files = sorted(SESSION_DIR.glob("*_telemetry.csv"), key=_session_time)
     if not files:
         print("No sessions found.")
         sys.exit(1)
